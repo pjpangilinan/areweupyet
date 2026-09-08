@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "go run ./cmd/local-dev",
     "build:frontend": "npm run build --prefix frontend",
     "test:go": "go test -v ./internal/... ./cmd/...",
     "build:go": "go build ./cmd/..."
