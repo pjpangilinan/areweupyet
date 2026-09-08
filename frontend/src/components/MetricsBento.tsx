@@ -152,7 +152,7 @@ export const MetricsBento: React.FC<MetricsBentoProps> = ({ endpoints }) => {
                 <span className="font-display text-2xl font-semibold text-[#e4e1e6]">
                   {endpoints.length}
                 </span>
-                <span className="text-xs font-mono text-tertiary font-medium">/ 20 Free Cap</span>
+                <span className="text-xs font-mono text-tertiary font-medium">/ 20 Limit</span>
               </div>
             </div>
             <span className="p-2 rounded-lg bg-surface-container text-primary">
@@ -168,8 +168,8 @@ export const MetricsBento: React.FC<MetricsBentoProps> = ({ endpoints }) => {
               />
             </div>
             <div className="flex items-center justify-between text-[10px] text-[#908fa0]">
-              <span>{20 - endpoints.length} monitors remaining</span>
-              <span className="text-primary font-medium">Always-Free</span>
+              <span>{20 - endpoints.length} monitors available</span>
+              <span className="text-primary font-medium">Standard Plan</span>
             </div>
           </div>
         </div>

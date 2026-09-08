@@ -7,18 +7,24 @@ import {
   Globe,
   FileText,
   Bell,
-  User,
+  User as UserIcon,
+  AlertOctagon,
 } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext';
 
 interface SidebarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
+  onOpenAuth: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, onOpenAuth }) => {
+  const { user } = useAuth();
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid },
     { id: 'endpoints', label: 'Endpoints & Monitors', icon: Activity },
+    { id: 'incidents', label: 'Incidents & Outages', icon: AlertOctagon },
     { id: 'new-probe', label: 'New Probe', icon: PlusCircle },
     { id: 'settings', label: 'Workspace Settings', icon: Sliders },
     { id: 'status-page', label: 'Public Status Page', icon: Globe },
@@ -78,16 +84,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
         </button>
 
         <button
+          onClick={() => onSelectTab('incidents')}
           className="relative flex items-center justify-center w-11 h-11 rounded-xl text-[#c7c4d7] hover:text-[#e4e1e6] hover:bg-surface-container transition-colors"
-          title="Notifications"
+          title="Incident Alerts"
         >
           <Bell className="w-5 h-5" />
           <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-tertiary"></span>
         </button>
 
-        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-[#1000a9]">
-          <User className="w-4 h-4" />
-        </div>
+        <button
+          onClick={onOpenAuth}
+          className="w-8 h-8 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-primary hover:scale-105 transition-transform"
+          title={user ? `Cognito: ${user.email} (${user.tenantId})` : 'Sign In with Cognito'}
+        >
+          {user ? (
+            <span className="text-[11px] font-mono font-semibold">
+              {user.email.substring(0, 2).toUpperCase()}
+            </span>
+          ) : (
+            <UserIcon className="w-4 h-4" />
+          )}
+        </button>
       </div>
     </aside>
   );

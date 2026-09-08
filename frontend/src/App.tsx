@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { Endpoint } from './types';
+import { AuthProvider, useAuth } from './auth/AuthContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { MetricsBento } from './components/MetricsBento';
@@ -7,79 +8,121 @@ import { MonitorsTable } from './components/MonitorsTable';
 import { EndpointDetailModal } from './components/EndpointDetailModal';
 import { CreateMonitorModal } from './components/CreateMonitorModal';
 import { SettingsView } from './components/SettingsView';
+import { IncidentsView } from './components/IncidentsView';
+import { AuthModal } from './components/AuthModal';
 import { StatusPage } from './StatusPage';
 import { TermsOfService, PrivacyPolicy } from './Legal';
+import { fetchEndpoints, createEndpoint, deleteEndpoint } from './api/client';
 
-export const App: React.FC = () => {
+const initialEndpoints: Endpoint[] = [
+  {
+    tenantId: 'demo',
+    endpointId: 'ep-auth',
+    name: 'Authentication Service',
+    url: 'https://auth.example.com/health',
+    frequencyMin: 5,
+    timeoutSec: 10,
+    expectedStatus: 200,
+    status: 'UP',
+    nextCheckAt: new Date().toISOString(),
+    consecutiveFail: 0,
+    createdAt: new Date(Date.now() - 86400000 * 30).toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    tenantId: 'demo',
+    endpointId: 'ep-api',
+    name: 'Telemetry Ingest Gateway',
+    url: 'https://api.example.com/v1/ping',
+    frequencyMin: 5,
+    timeoutSec: 10,
+    expectedStatus: 200,
+    status: 'UP',
+    nextCheckAt: new Date().toISOString(),
+    consecutiveFail: 0,
+    createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    tenantId: 'demo',
+    endpointId: 'ep-docs',
+    name: 'Public Documentation & CDN',
+    url: 'https://docs.example.com/status',
+    frequencyMin: 5,
+    timeoutSec: 10,
+    expectedStatus: 200,
+    status: 'UP',
+    nextCheckAt: new Date().toISOString(),
+    consecutiveFail: 0,
+    createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    tenantId: 'demo',
+    endpointId: 'ep-billing',
+    name: 'Billing Webhook Worker',
+    url: 'https://billing.example.com/events',
+    frequencyMin: 10,
+    timeoutSec: 15,
+    expectedStatus: 200,
+    status: 'UP',
+    nextCheckAt: new Date().toISOString(),
+    consecutiveFail: 0,
+    createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+];
+
+const DashboardApp: React.FC = () => {
+  const { user } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [endpoints, setEndpoints] = useState<Endpoint[]>(initialEndpoints);
 
-  const [endpoints, setEndpoints] = useState<Endpoint[]>([
-    {
-      tenantId: 'demo',
-      endpointId: 'ep-auth',
-      name: 'Authentication Service',
-      url: 'https://auth.example.com/health',
-      frequencyMin: 5,
-      timeoutSec: 10,
-      expectedStatus: 200,
-      status: 'UP',
-      nextCheckAt: new Date().toISOString(),
-      consecutiveFail: 0,
-      createdAt: new Date(Date.now() - 86400000 * 30).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      tenantId: 'demo',
-      endpointId: 'ep-api',
-      name: 'Telemetry Ingest Gateway',
-      url: 'https://api.example.com/v1/ping',
-      frequencyMin: 5,
-      timeoutSec: 10,
-      expectedStatus: 200,
-      status: 'UP',
-      nextCheckAt: new Date().toISOString(),
-      consecutiveFail: 0,
-      createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      tenantId: 'demo',
-      endpointId: 'ep-docs',
-      name: 'Public Documentation & CDN',
-      url: 'https://docs.example.com/status',
-      frequencyMin: 5,
-      timeoutSec: 10,
-      expectedStatus: 200,
-      status: 'UP',
-      nextCheckAt: new Date().toISOString(),
-      consecutiveFail: 0,
-      createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      tenantId: 'demo',
-      endpointId: 'ep-billing',
-      name: 'Billing Webhook Worker',
-      url: 'https://billing.example.com/events',
-      frequencyMin: 10,
-      timeoutSec: 15,
-      expectedStatus: 200,
-      status: 'UP',
-      nextCheckAt: new Date().toISOString(),
-      consecutiveFail: 0,
-      createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-  ]);
+  // Sync with live backend API when user / tenant changes
+  const loadEndpoints = useCallback(async () => {
+    try {
+      const data = await fetchEndpoints(user?.token);
+      if (data && data.length > 0) {
+        setEndpoints(data);
+      }
+    } catch {
+      // Keep initial/cached endpoints if local API is not responding
+    }
+  }, [user?.token]);
 
-  const handleAddEndpoint = (newEp: Endpoint) => {
-    setEndpoints((prev) => [...prev, newEp]);
+  useEffect(() => {
+    loadEndpoints();
+  }, [loadEndpoints]);
+
+  const handleAddEndpoint = async (newEp: Endpoint) => {
+    try {
+      const created = await createEndpoint(
+        {
+          name: newEp.name,
+          url: newEp.url,
+          frequencyMin: newEp.frequencyMin,
+          timeoutSec: newEp.timeoutSec,
+          expectedStatus: newEp.expectedStatus,
+        },
+        user?.token
+      );
+      setEndpoints((prev) => [...prev, created]);
+    } catch {
+      // Optimistic local state fallback
+      setEndpoints((prev) => [...prev, newEp]);
+    }
   };
 
-  const handleDeleteEndpoint = (id: string) => {
+  const handleDeleteEndpoint = async (id: string) => {
+    try {
+      await deleteEndpoint(id, user?.token);
+    } catch {
+      // ignore
+    }
     setEndpoints((prev) => prev.filter((e) => e.endpointId !== id));
     if (selectedEndpoint?.endpointId === id) {
       setSelectedEndpoint(null);
@@ -88,12 +131,12 @@ export const App: React.FC = () => {
 
   const isOperational = endpoints.every((e) => e.status !== 'DOWN');
 
-  // Handle full-page views (Status Page, Legal)
+  // Full-page views (Status Page, Legal)
   if (currentTab === 'status-page') {
     return (
       <div className="min-h-screen bg-surface text-[#e4e1e6] py-8 px-4">
         <StatusPage
-          tenantId="demo"
+          tenantId={user ? user.tenantId : 'demo'}
           endpoints={endpoints}
           onBack={() => setCurrentTab('dashboard')}
         />
@@ -129,6 +172,7 @@ export const App: React.FC = () => {
             setCurrentTab(tab);
           }
         }}
+        onOpenAuth={() => setIsAuthOpen(true)}
       />
 
       {/* Main App Container */}
@@ -138,6 +182,7 @@ export const App: React.FC = () => {
           onNewMonitor={() => setIsCreateOpen(true)}
           onOpenStatusPage={() => setCurrentTab('status-page')}
           onSearchChange={setSearchQuery}
+          onOpenAuth={() => setIsAuthOpen(true)}
           searchQuery={searchQuery}
           isOperational={isOperational}
         />
@@ -184,6 +229,8 @@ export const App: React.FC = () => {
             </div>
           )}
 
+          {currentTab === 'incidents' && <IncidentsView endpoints={endpoints} />}
+
           {currentTab === 'settings' && <SettingsView />}
         </main>
 
@@ -191,7 +238,7 @@ export const App: React.FC = () => {
         <footer className="border-t border-[#353438] py-4 px-8 flex flex-col sm:flex-row items-center justify-between text-xs font-mono text-[#908fa0] gap-2 bg-surface-container-lowest">
           <div className="flex items-center gap-3">
             <img src="/icon.png" alt="AreWeUpYet" className="w-4 h-4 rounded object-contain" />
-            <span>AreWeUpYet — Multi-tenant Uptime Telemetry (Always-Free Tier)</span>
+            <span>AreWeUpYet — Global Synthetic Uptime & Incident Telemetry</span>
           </div>
           <div className="flex items-center space-x-4">
             <button
@@ -224,6 +271,11 @@ export const App: React.FC = () => {
         currentCount={endpoints.length}
       />
 
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+      />
+
       {selectedEndpoint && (
         <EndpointDetailModal
           endpoint={selectedEndpoint}
@@ -233,5 +285,11 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
+export const App: React.FC = () => (
+  <AuthProvider>
+    <DashboardApp />
+  </AuthProvider>
+);
 
 export default App;

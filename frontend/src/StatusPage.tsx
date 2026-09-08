@@ -156,7 +156,7 @@ export const StatusPage: React.FC<StatusPageProps> = ({ tenantId, endpoints, onB
         </div>
         <div className="flex items-center space-x-2">
           <img src="/icon.png" alt="AreWeUpYet" className="w-4 h-4 rounded object-contain" />
-          <span>Powered by AreWeUpYet (AWS Always-Free Tier)</span>
+          <span>Powered by AreWeUpYet Telemetry</span>
         </div>
       </div>
     </div>

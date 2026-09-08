@@ -99,30 +99,30 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Free Tier Hard Limits Guardrail */}
+      {/* Infrastructure Limits & Capacity */}
       <div className="p-6 rounded-2xl bg-surface-container border border-[#353438] space-y-4">
         <div className="flex items-center gap-2 border-b border-[#353438] pb-3">
           <Shield className="w-5 h-5 text-tertiary" />
-          <h3 className="font-display font-medium text-base">AWS Always-Free Tier Guardrails</h3>
+          <h3 className="font-display font-medium text-base">Workspace Guardrails & Capacity</h3>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
           <div className="p-3 rounded-xl bg-surface-container-low border border-[#353438] space-y-1">
-            <span className="text-[#908fa0]">TENANT ENDPOINT CAP</span>
+            <span className="text-[#908fa0]">WORKSPACE PROBE LIMIT</span>
             <div className="text-base font-display font-semibold text-[#e4e1e6]">20 Monitors</div>
             <p className="text-[10px] text-tertiary">Enforced at API layer</p>
           </div>
 
           <div className="p-3 rounded-xl bg-surface-container-low border border-[#353438] space-y-1">
-            <span className="text-[#908fa0]">MINIMUM CHECK FLOOR</span>
+            <span className="text-[#908fa0]">MINIMUM CHECK CADENCE</span>
             <div className="text-base font-display font-semibold text-[#e4e1e6]">5 Minutes</div>
-            <p className="text-[10px] text-tertiary">Prevents compute exhaustion</p>
+            <p className="text-[10px] text-tertiary">Dedicated worker scheduling</p>
           </div>
 
           <div className="p-3 rounded-xl bg-surface-container-low border border-[#353438] space-y-1">
-            <span className="text-[#908fa0]">RAW PING RETENTION</span>
+            <span className="text-[#908fa0]">RAW TELEMETRY RETENTION</span>
             <div className="text-base font-display font-semibold text-[#e4e1e6]">90 Days (TTL)</div>
-            <p className="text-[10px] text-tertiary">Auto-purged within 25 GB limit</p>
+            <p className="text-[10px] text-tertiary">Rolling automated lifecycle</p>
           </div>
         </div>
       </div>

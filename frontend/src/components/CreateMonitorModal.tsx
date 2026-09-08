@@ -29,7 +29,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
     setError(null);
 
     if (currentCount >= 20) {
-      setError('Hard tenant cap reached: Maximum 20 active monitors in Always-Free tier.');
+      setError('Workspace monitor limit reached: Maximum 20 active probes allocated.');
       return;
     }
 
@@ -57,7 +57,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
     }
 
     if (frequency < 5) {
-      setError('Minimum check interval floor is 5 minutes for Always-Free tier.');
+      setError('Minimum check interval floor is 5 minutes.');
       return;
     }
 
@@ -155,7 +155,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
 
           <div className="p-3 rounded-xl bg-surface-container-low border border-[#353438] text-[11px] text-[#908fa0] space-y-1">
             <div className="flex items-center justify-between">
-              <span>Tenant Quota Usage:</span>
+              <span>Workspace Capacity:</span>
               <strong className="text-[#e4e1e6]">{currentCount} / 20 Used</strong>
             </div>
             <p>2 consecutive check failures will open an incident and dispatch webhook alerts.</p>
