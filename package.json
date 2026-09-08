@@ -1,0 +1,19 @@
+{
+  "name": "areweupyet",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
+    "test:go": "go test -v ./...",
+    "build:go": "go build ./cmd/..."
+  },
+  "devDependencies": {
+    "@aws-amplify/backend": "^1.14.0",
+    "@aws-amplify/backend-cli": "^1.4.0",
+    "aws-cdk": "^2.177.0",
+    "aws-cdk-lib": "^2.177.0",
+    "constructs": "^10.4.2",
+    "typescript": "^5.7.3"
+  }
+}
