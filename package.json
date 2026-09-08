@@ -5,7 +5,7 @@
   "scripts": {
     "dev:frontend": "npm run dev --prefix frontend",
     "build:frontend": "npm run build --prefix frontend",
-    "test:go": "go test -v ./...",
+    "test:go": "go test -v ./internal/... ./cmd/...",
     "build:go": "go build ./cmd/..."
   },
   "devDependencies": {

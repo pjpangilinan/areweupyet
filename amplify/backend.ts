@@ -1,5 +1,6 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
+import { DynamoDbTables } from './data/dynamodb';
 
 /**
  * AreWeUpYet Amplify Gen 2 Backend Definition
@@ -12,3 +13,6 @@ import { auth } from './auth/resource';
 export const backend = defineBackend({
   auth,
 });
+
+// Custom CDK DynamoDB stack (Always-Free tier DynamoDB tables)
+new DynamoDbTables(backend.createStack('DynamoDbStack'), 'AreWeUpYetData');
