@@ -1,6 +1,7 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { DynamoDbTables } from './data/dynamodb';
+import { DispatcherMonitoring } from './monitoring/alarms';
 
 /**
  * AreWeUpYet Amplify Gen 2 Backend Definition
@@ -9,6 +10,7 @@ import { DynamoDbTables } from './data/dynamodb';
  * - Compute (Go Lambdas): Always-free up to 1M invocations / 3.2M seconds compute per month.
  * - Storage (DynamoDB): Always-free up to 25 GB storage and 25 RCU / 25 WCU.
  * - Network (Function URLs): No API Gateway charges.
+ * - Monitoring (CloudWatch): 10 metric alarms Always-Free.
  */
 export const backend = defineBackend({
   auth,
@@ -16,3 +18,7 @@ export const backend = defineBackend({
 
 // Custom CDK DynamoDB stack (Always-Free tier DynamoDB tables)
 new DynamoDbTables(backend.createStack('DynamoDbStack'), 'AreWeUpYetData');
+
+// Watch the watcher: CloudWatch alarm on dispatcher failure
+new DispatcherMonitoring(backend.createStack('MonitoringStack'), 'AreWeUpYetMonitoring');
+
