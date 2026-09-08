@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"areweupyet/internal/accounting"
 	"areweupyet/internal/dynamo"
 	"areweupyet/internal/models"
 )
@@ -32,11 +33,14 @@ type TenantPublicStatus struct {
 	GeneratedAt  time.Time               `json:"generatedAt"`
 }
 
-// EndpointHistoryResponse provides latency and incident history for public inspection.
+// EndpointHistoryResponse provides latency, uptime metrics, and incident history for public inspection.
 type EndpointHistoryResponse struct {
-	EndpointID string              `json:"endpointId"`
-	RecentPings []models.PingResult `json:"recentPings"`
-	Incidents   []models.Incident   `json:"incidents"`
+	EndpointID  string                     `json:"endpointId"`
+	Uptime24h   accounting.UptimeStats     `json:"uptime24h"`
+	Uptime7d    accounting.UptimeStats     `json:"uptime7d"`
+	Uptime30d   accounting.UptimeStats     `json:"uptime30d"`
+	Timeline    []accounting.TimelineEntry `json:"timeline"`
+	RecentPings []models.PingResult        `json:"recentPings"`
 }
 
 // NewServer initializes public unauthenticated status server.
@@ -139,10 +143,19 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 		incidents = []models.Incident{}
 	}
 
+	now := time.Now().UTC()
+	u24h := accounting.CalculateUptime(incidents, now.Add(-24*time.Hour), now)
+	u7d := accounting.CalculateUptime(incidents, now.Add(-7*24*time.Hour), now)
+	u30d := accounting.CalculateUptime(incidents, now.Add(-30*24*time.Hour), now)
+	timeline := accounting.FormatTimeline(incidents)
+
 	response := EndpointHistoryResponse{
 		EndpointID:  endpointID,
+		Uptime24h:   u24h,
+		Uptime7d:    u7d,
+		Uptime30d:   u30d,
+		Timeline:    timeline,
 		RecentPings: pings,
-		Incidents:   incidents,
 	}
 
 	writeJSON(w, http.StatusOK, response)

@@ -56,7 +56,7 @@ func TestPublicAPI_TenantStatusAggregation(t *testing.T) {
 	_ = store.SaveIncident(context.Background(), models.Incident{
 		EndpointID: "ep-down",
 		TenantID:   tenant,
-		StartedAt:  now,
+		StartedAt:  now.Add(-1 * time.Hour),
 		Reason:     "503 Service Unavailable",
 	})
 
@@ -75,8 +75,10 @@ func TestPublicAPI_TenantStatusAggregation(t *testing.T) {
 	var hist EndpointHistoryResponse
 	require.NoError(t, json.Unmarshal(wHist.Body.Bytes(), &hist))
 	assert.Equal(t, "ep-down", hist.EndpointID)
-	assert.Len(t, hist.Incidents, 1)
-	assert.Equal(t, "503 Service Unavailable", hist.Incidents[0].Reason)
+	assert.NotEmpty(t, hist.Timeline)
+	assert.Equal(t, "503 Service Unavailable", hist.Timeline[0].Reason)
+	assert.True(t, hist.Timeline[0].IsOpen)
+	assert.Less(t, hist.Uptime24h.UptimePercentage, 100.0)
 }
 
 func TestPublicAPI_LambdaAdapter(t *testing.T) {
