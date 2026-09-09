@@ -2,6 +2,7 @@
   "name": "areweupyet",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:backend": "go run ./cmd/local-dev",
