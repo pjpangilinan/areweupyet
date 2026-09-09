@@ -23,7 +23,7 @@ import { AuthModal } from './components/AuthModal';
 import { EndpointDetailModal } from './components/EndpointDetailModal';
 import { StatusPage } from './StatusPage';
 import { TermsOfService, PrivacyPolicy } from './Legal';
-import { fetchEndpoints, createEndpoint, deleteEndpoint } from './api/client';
+import { fetchEndpoints, createEndpoint, deleteEndpoint, testWebhook } from './api/client';
 
 const DashboardApp: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -48,7 +48,9 @@ const DashboardApp: React.FC = () => {
   // Settings State
   const [webhookUrl, setWebhookUrl] = useState('https://api.mycompany.com/webhooks/uptime');
   const [webhookSecret] = useState('sec_live_9b8f41e0a24d57c3e1b');
-  const [testSent, setTestSent] = useState(false);
+  const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState<string | null>(null);
+  const [webhookTestError, setWebhookTestError] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
 
   // Support direct hash routing: #/status/demo opens shareable status page without login
@@ -177,9 +179,25 @@ const DashboardApp: React.FC = () => {
     setTimeout(() => setCopiedSecret(false), 2000);
   };
 
-  const handleTestWebhook = () => {
-    setTestSent(true);
-    setTimeout(() => setTestSent(false), 3000);
+  const handleTestWebhook = async () => {
+    setIsTestingWebhook(true);
+    setWebhookTestError(null);
+    setWebhookTestResult(null);
+    try {
+      const res = await testWebhook(
+        webhookUrl,
+        webhookSecret,
+        user?.token,
+        user?.tenantId || 'demo'
+      );
+      setWebhookTestResult(res.message || 'Webhook delivered successfully');
+      setTimeout(() => setWebhookTestResult(null), 5000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Webhook test delivery failed';
+      setWebhookTestError(msg);
+    } finally {
+      setIsTestingWebhook(false);
+    }
   };
 
   const totalCount = endpoints.length;
@@ -600,16 +618,25 @@ const DashboardApp: React.FC = () => {
                   />
                   <button
                     onClick={handleTestWebhook}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#2a2a2d] hover:bg-[#353438] text-xs font-mono text-[#e4e1e6] transition-colors"
+                    disabled={isTestingWebhook}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#2a2a2d] hover:bg-[#353438] text-xs font-mono text-[#e4e1e6] transition-colors disabled:opacity-50"
                   >
-                    <Send className="w-3.5 h-3.5 text-primary" />
-                    <span>Test</span>
+                    <Send className={`w-3.5 h-3.5 text-primary ${isTestingWebhook ? 'animate-pulse' : ''}`} />
+                    <span>{isTestingWebhook ? 'Sending...' : 'Test'}</span>
                   </button>
                 </div>
-                {testSent && (
-                  <div className="text-xs font-mono text-tertiary flex items-center gap-1 pt-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Test webhook dispatched with HMAC-SHA256 signature (HTTP 200 OK)</span>
+
+                {webhookTestResult && (
+                  <div className="p-2.5 rounded-lg bg-[#002113] border border-[#005236] text-xs font-mono text-tertiary flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                    <span>{webhookTestResult}</span>
+                  </div>
+                )}
+
+                {webhookTestError && (
+                  <div className="p-2.5 rounded-lg bg-[#690005]/20 border border-[#ffb4ab] text-xs font-mono text-[#ffdad6] flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-error flex-shrink-0" />
+                    <span>{webhookTestError}</span>
                   </div>
                 )}
               </div>
@@ -769,6 +796,10 @@ const DashboardApp: React.FC = () => {
           endpoint={selectedEndpoint}
           tenantId={selectedEndpoint.tenantId || user?.tenantId || 'demo'}
           onClose={() => setSelectedEndpoint(null)}
+          onEndpointUpdated={(updated) => {
+            setEndpoints((prev) => prev.map((e) => (e.endpointId === updated.endpointId ? updated : e)));
+            setSelectedEndpoint(updated);
+          }}
         />
       )}
 

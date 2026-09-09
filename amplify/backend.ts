@@ -2,6 +2,7 @@ import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { DynamoDbTables } from './data/dynamodb';
 import { DispatcherMonitoring } from './monitoring/alarms';
+import { FreeTierBudget } from './monitoring/budget';
 
 /**
  * AreWeUpYet Amplify Gen 2 Backend Definition
@@ -11,6 +12,7 @@ import { DispatcherMonitoring } from './monitoring/alarms';
  * - Storage (DynamoDB): Always-free up to 25 GB storage and 25 RCU / 25 WCU.
  * - Network (Function URLs): No API Gateway charges.
  * - Monitoring (CloudWatch): 10 metric alarms Always-Free.
+ * - Budget Safety Alert: $1.00 threshold notification via AWS Budgets (2 free budgets).
  */
 export const backend = defineBackend({
   auth,
@@ -21,4 +23,8 @@ new DynamoDbTables(backend.createStack('DynamoDbStack'), 'AreWeUpYetData');
 
 // Watch the watcher: CloudWatch alarm on dispatcher failure
 new DispatcherMonitoring(backend.createStack('MonitoringStack'), 'AreWeUpYetMonitoring');
+
+// Enforce AWS Free Tier budget safety alert
+new FreeTierBudget(backend.createStack('BudgetStack'), 'AreWeUpYetBudget');
+
 

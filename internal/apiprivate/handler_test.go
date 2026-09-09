@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"areweupyet/internal/dynamo"
 	"areweupyet/internal/models"
@@ -203,3 +204,73 @@ func TestPrivateAPI_LambdaFunctionURLAdapter(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resJWT.StatusCode)
 	assert.Equal(t, "[]\n", resJWT.Body)
 }
+
+func TestPrivateAPI_ManualCheckAndRateLimit(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+	tenant := "rate-tenant"
+
+	// 1. Create a test endpoint
+	ep := models.Endpoint{
+		TenantID:        tenant,
+		EndpointID:      "ep-rate-test",
+		Name:            "Rate Test Probe",
+		URL:             "https://example.com",
+		FrequencyMin:    5,
+		TimeoutSec:      5,
+		ExpectedStatus:  200,
+		StatusBucket:    "ACTIVE",
+		NextCheckAt:     time.Now().UTC(),
+		Status:          "PENDING",
+		ConsecutiveFail: 0,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	require.NoError(t, store.CreateEndpoint(context.Background(), ep))
+
+	// 2. First check -> 200 OK
+	req := httptest.NewRequest(http.MethodPost, "/endpoints/ep-rate-test/check", nil)
+	req.Header.Set("X-Tenant-ID", tenant)
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "latencyMs")
+
+	// 3. Immediate second check -> 429 Too Many Requests (Rate limit guard)
+	req2 := httptest.NewRequest(http.MethodPost, "/endpoints/ep-rate-test/check", nil)
+	req2.Header.Set("X-Tenant-ID", tenant)
+	w2 := httptest.NewRecorder()
+	server.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	assert.NotEmpty(t, w2.Header().Get("Retry-After"))
+	assert.Contains(t, w2.Body.String(), "Rate limit guard")
+}
+
+func TestPrivateAPI_WebhookTestSSRFGuard(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+	tenant := "ssrf-tenant"
+
+	// 1. Webhook pointing to cloud metadata -> 400 Bad Request
+	body, _ := json.Marshal(TestWebhookRequest{
+		URL: "http://169.254.169.254/latest/meta-data",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/settings/webhook/test", bytes.NewReader(body))
+	req.Header.Set("X-Tenant-ID", tenant)
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "SSRF Guard")
+
+	// 2. Webhook pointing to loopback -> 400 Bad Request
+	bodyLoopback, _ := json.Marshal(TestWebhookRequest{
+		URL: "http://127.0.0.1:9090/hook",
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/settings/webhook/test", bytes.NewReader(bodyLoopback))
+	req2.Header.Set("X-Tenant-ID", tenant)
+	w2 := httptest.NewRecorder()
+	server.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusBadRequest, w2.Code)
+	assert.Contains(t, w2.Body.String(), "SSRF Guard")
+}
+

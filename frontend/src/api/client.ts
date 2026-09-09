@@ -154,3 +154,75 @@ export async function fetchEndpointHistory(
   }
   return res.json();
 }
+
+export interface ManualCheckResponse {
+  result: {
+    endpointId: string;
+    checkedAt: string;
+    statusCode: number;
+    latencyMs: number;
+    success: boolean;
+    errorMessage?: string;
+  };
+  endpoint: Endpoint;
+  incidentStateChanged: boolean;
+}
+
+export async function triggerManualCheck(
+  endpointId: string,
+  token?: string,
+  tenantId?: string
+): Promise<ManualCheckResponse> {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (tenantId) headers['X-Tenant-ID'] = tenantId;
+
+  const res = await fetch(`${API_BASE}/endpoints/${endpointId}/check`, {
+    method: 'POST',
+    headers,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 429) {
+      throw new Error(data.error || 'Rate limit: Please wait 30 seconds between manual checks.');
+    }
+    throw new Error(data.error || `Failed to run check: ${res.statusText}`);
+  }
+
+  return res.json();
+}
+
+export interface WebhookTestResponse {
+  success: boolean;
+  message: string;
+  event: string;
+  signatureSent: string;
+}
+
+export async function testWebhook(
+  url: string,
+  secret?: string,
+  token?: string,
+  tenantId?: string
+): Promise<WebhookTestResponse> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (tenantId) headers['X-Tenant-ID'] = tenantId;
+
+  const res = await fetch(`${API_BASE}/settings/webhook/test`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ url, secret }),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Webhook test failed: ${res.statusText}`);
+  }
+
+  return res.json();
+}
+

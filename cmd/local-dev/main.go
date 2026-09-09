@@ -110,6 +110,7 @@ func main() {
 	// Private routes
 	mux.Handle("/endpoints", withCORS(privateServer))
 	mux.Handle("/endpoints/", withCORS(privateServer))
+	mux.Handle("/settings/", withCORS(privateServer))
 
 	// Root status check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
