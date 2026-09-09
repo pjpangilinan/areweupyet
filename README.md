@@ -1,4 +1,4 @@
-﻿<p align=center>
+<p align=center>
   <img src=logo.png alt=AreWeUpYet width=220>
 </p>
 
@@ -8,13 +8,14 @@
   <strong>Multi-tenant synthetic uptime monitoring SaaS engineered to run indefinitely within the AWS Always-Free Tier ($0.00/mo).</strong>
 </p>
 
-<p align=center>
-  <a href=https://main.d3pikhz9umtg2m.amplifyapp.com/><img src=https://img.shields.io/badge/Production-Live-00C853?style=flat&logo=amazonaws alt=Live Demo></a>
-  <img src=https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white alt=Go>
-  <img src=https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=white alt=React>
-  <img src=https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat&logo=typescript&logoColor=white alt=TypeScript>
-  <img src=https://img.shields.io/badge/AWS-Always%20Free%20Tier-FF9900?style=flat&logo=amazon-aws&logoColor=white alt=AWS Free Tier>
-  <a href=LICENSE><img src=https://img.shields.io/badge/License-MIT-blue.svg alt=MIT License></a>
+<p align="center">
+  <a href="https://main.d3pikhz9umtg2m.amplifyapp.com/"><img src="https://img.shields.io/badge/Production-Live-00C853?style=flat&logo=amazonaws" alt="Live Demo"></a>
+  <a href="https://main.d3pikhz9umtg2m.amplifyapp.com/#/status/c97a151c-d091-7089-88a9-7a8eee8689b8"><img src="https://img.shields.io/badge/Public%20Status%20Page-View%20Live-2563EB?style=flat&logo=statuspage" alt="Live Status Page"></a>
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/AWS-Always%20Free%20Tier-FF9900?style=flat&logo=amazon-aws&logoColor=white" alt="AWS Free Tier">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
 ---
@@ -26,9 +27,9 @@
 ### Core Highlights
 
 - **Zero Compute Cost**: Operates entirely within AWS Lambda, DynamoDB, and CloudFront always-free allowances.
-- **SSRF Defense-in-Depth**: Blocks private, loopback, link-local, carrier-grade NAT, and cloud metadata (169.254.169.254) addresses at DNS lookup and raw socket connection time.
-- **View-Only Public Status Pages**: Shareable dashboards (/#/status/:tenantId) with automatic 30-second polling and unauthenticated read access.
-- **Cryptographic Webhook Delivery**: HMAC-SHA256 signatures (X-AreWeUpYet-Signature) with exponential retry backoff.
+- **SSRF Defense-in-Depth**: Blocks private, loopback, link-local, carrier-grade NAT, and cloud metadata (`169.254.169.254`) addresses at DNS lookup and raw socket connection time.
+- **View-Only Public Status Pages**: Shareable dashboards ([Live Demo](https://main.d3pikhz9umtg2m.amplifyapp.com/#/status/c97a151c-d091-7089-88a9-7a8eee8689b8)) with automatic 30-second polling and unauthenticated read access.
+- **Cryptographic Webhook Delivery**: HMAC-SHA256 signatures (`X-AreWeUpYet-Signature`) with exponential retry backoff.
 - **Multi-Tenant Isolation**: Amazon Cognito User Pool authentication with strict tenant-scoped data partitioning.
 
 ---
@@ -38,7 +39,7 @@
 | Authenticated Telemetry Dashboard | Public View-Only Status Page |
 |:---:|:---:|
 | ![Fleet Dashboard](docs/screenshots/05-dashboard-monitors.png) | ![Public Status Page](docs/screenshots/08-status-page.png) |
-| *Live operational health, monitor fleet cards, and collection filters* | *Real-time unauthenticated status page auto-refreshing every 30s* |
+| *Live operational health, monitor fleet cards, and collection filters* | *Real-time unauthenticated status page auto-refreshing every 30s ([Live Link](https://main.d3pikhz9umtg2m.amplifyapp.com/#/status/c97a151c-d091-7089-88a9-7a8eee8689b8))* |
 
 | Latency Trend & Probe Inspector | Alerts & HMAC Webhook Config |
 |:---:|:---:|
