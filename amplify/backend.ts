@@ -1,9 +1,9 @@
 import { defineBackend } from '@aws-amplify/backend';
-import { auth } from './auth/resource';
-import { DynamoDbTables } from './data/dynamodb';
-import { LambdaFunctions } from './functions/lambdas';
-import { DispatcherMonitoring } from './monitoring/alarms';
-import { FreeTierBudget } from './monitoring/budget';
+import { auth } from './auth/resource.js';
+import { DynamoDbTables } from './data/dynamodb.js';
+import { LambdaFunctions } from './functions/lambdas.js';
+import { DispatcherMonitoring } from './monitoring/alarms.js';
+import { FreeTierBudget } from './monitoring/budget.js';
 
 /**
  * AreWeUpYet Amplify Gen 2 Backend Definition
