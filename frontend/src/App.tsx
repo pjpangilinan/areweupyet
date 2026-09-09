@@ -25,43 +25,11 @@ import { StatusPage } from './StatusPage';
 import { TermsOfService, PrivacyPolicy } from './Legal';
 import { fetchEndpoints, createEndpoint, deleteEndpoint } from './api/client';
 
-const initialEndpoints: Endpoint[] = [
-  {
-    tenantId: 'demo',
-    endpointId: 'ep-google',
-    name: 'Google Public DNS / Web',
-    url: 'https://www.google.com',
-    group: 'External Dependencies',
-    frequencyMin: 5,
-    timeoutSec: 5,
-    expectedStatus: 200,
-    status: 'UP',
-    nextCheckAt: new Date().toISOString(),
-    consecutiveFail: 0,
-    createdAt: new Date(Date.now() - 86400000 * 30).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    tenantId: 'demo',
-    endpointId: 'ep-httpstat',
-    name: 'Example Domain Health',
-    url: 'https://example.com',
-    group: 'Websites',
-    frequencyMin: 5,
-    timeoutSec: 5,
-    expectedStatus: 200,
-    status: 'UP',
-    nextCheckAt: new Date().toISOString(),
-    consecutiveFail: 0,
-    createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
 const DashboardApp: React.FC = () => {
   const { user, signOut } = useAuth();
   const [currentTab, setCurrentTab] = useState<'monitors' | 'settings' | 'status-page' | 'terms' | 'privacy'>('monitors');
-  const [endpoints, setEndpoints] = useState<Endpoint[]>(initialEndpoints);
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -100,13 +68,12 @@ const DashboardApp: React.FC = () => {
     setIsRefreshing(true);
     try {
       const data = await fetchEndpoints(user?.token, user?.tenantId || 'demo');
-      if (data && data.length > 0) {
-        setEndpoints(data);
-      }
+      setEndpoints(data || []);
     } catch (err) {
       console.warn('Backend fetch error:', err);
     } finally {
       setIsRefreshing(false);
+      setHasLoaded(true);
     }
   }, [user?.token, user?.tenantId]);
 
@@ -215,8 +182,12 @@ const DashboardApp: React.FC = () => {
     setTimeout(() => setTestSent(false), 3000);
   };
 
+  const totalCount = endpoints.length;
   const downCount = endpoints.filter((e) => e.status === 'DOWN').length;
-  const isHealthy = downCount === 0;
+  const upCount = endpoints.filter((e) => e.status === 'UP').length;
+  const pendingCount = endpoints.filter((e) => e.status === 'PENDING').length;
+  const isHealthy = downCount === 0 && totalCount > 0;
+  const fleetUptime = totalCount > 0 ? ((upCount / totalCount) * 100).toFixed(1) + '%' : '—';
 
   const filteredEndpoints = endpoints
     .filter((ep) => {
@@ -270,20 +241,20 @@ const DashboardApp: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#131316] text-[#e4e1e6] flex flex-col font-sans">
       {/* Clean Top Navbar */}
-      <header className="sticky top-0 z-30 bg-[#131316]/90 backdrop-blur border-b border-[#2a2a2d] px-4 sm:px-8 h-16 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-[#131316]/95 backdrop-blur border-b border-[#2a2a2d] px-3 sm:px-8 h-14 sm:h-16 flex items-center justify-between">
         {/* Left: Brand Logo & Navigation */}
-        <div className="flex items-center gap-6 sm:gap-8">
+        <div className="flex items-center gap-2 sm:gap-6">
           <button
             onClick={() => setCurrentTab('monitors')}
-            className="flex items-center gap-2 hover:opacity-90 transition-opacity"
+            className="flex items-center hover:opacity-90 transition-opacity flex-shrink-0"
           >
-            <img src="/logo.png" alt="AreWeUpYet" className="h-7 w-auto object-contain" />
+            <img src="/logo.png" alt="AreWeUpYet" className="h-6 sm:h-7 w-auto object-contain" />
           </button>
 
-          <nav className="flex items-center gap-1 sm:gap-2 text-xs font-mono">
+          <nav className="flex items-center gap-1 text-xs font-mono">
             <button
               onClick={() => setCurrentTab('monitors')}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg transition-colors ${
                 currentTab === 'monitors'
                   ? 'bg-[#2a2a2d] text-[#e4e1e6] font-medium'
                   : 'text-[#908fa0] hover:text-[#e4e1e6] hover:bg-[#1f1f22]'
@@ -293,17 +264,18 @@ const DashboardApp: React.FC = () => {
             </button>
             <button
               onClick={() => setCurrentTab('settings')}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg transition-colors ${
                 currentTab === 'settings'
                   ? 'bg-[#2a2a2d] text-[#e4e1e6] font-medium'
                   : 'text-[#908fa0] hover:text-[#e4e1e6] hover:bg-[#1f1f22]'
               }`}
             >
-              Alerts & Webhooks
+              <span className="sm:hidden">Alerts</span>
+              <span className="hidden sm:inline">Alerts & Webhooks</span>
             </button>
             <button
               onClick={() => setCurrentTab('status-page')}
-              className="hidden sm:flex items-center gap-1 px-3 py-1.5 rounded-lg text-[#908fa0] hover:text-[#e4e1e6] hover:bg-[#1f1f22] transition-colors"
+              className="hidden md:flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-[#908fa0] hover:text-[#e4e1e6] hover:bg-[#1f1f22] transition-colors"
             >
               <span>Public Status</span>
               <ExternalLink className="w-3 h-3" />
@@ -312,42 +284,47 @@ const DashboardApp: React.FC = () => {
         </div>
 
         {/* Right: Operational Status + New Monitor + Cognito User */}
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-[#1b1b1e] border border-[#2a2a2d] text-xs font-mono">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-[#1b1b1e] border border-[#2a2a2d] text-xs font-mono">
             <span
               className={`w-2 h-2 rounded-full ${
-                isHealthy ? 'bg-tertiary animate-pulse' : 'bg-error'
+                totalCount === 0
+                  ? 'bg-[#908fa0]'
+                  : isHealthy
+                  ? 'bg-tertiary animate-pulse'
+                  : 'bg-error'
               }`}
             />
             <span className={isHealthy ? 'text-tertiary font-medium' : 'text-error font-medium'}>
-              {isHealthy ? 'All Systems Normal' : `${downCount} Monitor Down`}
+              {totalCount === 0 ? 'No Monitors' : isHealthy ? 'All Systems Normal' : `${downCount} Down`}
             </span>
           </div>
 
           <button
             onClick={() => setIsAddOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-primary text-[#1000a9] rounded-lg text-xs font-mono font-semibold hover:bg-white transition-colors shadow-sm"
+            className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-primary text-[#1000a9] rounded-lg text-xs font-mono font-semibold hover:bg-white transition-colors shadow-sm"
           >
-            <Plus className="w-4 h-4" />
-            <span>Add Monitor</span>
+            <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">Add Monitor</span>
+            <span className="sm:hidden">Add</span>
           </button>
 
           {/* User Profile Pill */}
           {user ? (
-            <div className="flex items-center gap-2 pl-2 border-l border-[#2a2a2d]">
+            <div className="flex items-center gap-1 sm:gap-2 pl-1 sm:pl-2 border-l border-[#2a2a2d]">
               <button
                 onClick={() => setIsAuthOpen(true)}
-                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-[#1f1f22] transition-colors text-xs font-mono text-[#c7c4d7]"
+                className="flex items-center gap-1.5 px-1.5 sm:px-2 py-1 rounded-lg hover:bg-[#1f1f22] transition-colors text-xs font-mono text-[#c7c4d7]"
                 title={`Cognito: ${user.email} [${user.tenantId}]`}
               >
                 <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px]">
                   {user.email.substring(0, 2).toUpperCase()}
                 </div>
-                <span className="hidden lg:inline">{user.tenantId}</span>
+                <span className="hidden xl:inline">{user.tenantId}</span>
               </button>
               <button
                 onClick={signOut}
-                className="p-1.5 rounded-lg text-[#908fa0] hover:text-error hover:bg-[#1f1f22] transition-colors"
+                className="p-1 sm:p-1.5 rounded-lg text-[#908fa0] hover:text-error hover:bg-[#1f1f22] transition-colors"
                 title="Sign Out"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -356,9 +333,9 @@ const DashboardApp: React.FC = () => {
           ) : (
             <button
               onClick={() => setIsAuthOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1f1f22] text-xs font-mono text-primary hover:bg-[#2a2a2d] transition-colors"
+              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg bg-[#1f1f22] text-xs font-mono text-primary hover:bg-[#2a2a2d] transition-colors"
             >
-              <Lock className="w-3.5 h-3.5" />
+              <Lock className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
               <span>Sign In</span>
             </button>
           )}
@@ -366,79 +343,68 @@ const DashboardApp: React.FC = () => {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-8 space-y-6">
+      <main className="flex-1 max-w-5xl w-full mx-auto p-3 sm:p-6 lg:p-8 space-y-5 sm:space-y-6">
         {currentTab === 'monitors' && (
           <>
-            {/* Overview Summary Cards & Latency Graph */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
-                <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
+            {/* Real Dynamic Overview Summary Cards (Mobile: 2x2 grid, Desktop: 4 cols) */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+              <div className="p-3 sm:p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0]">
                   <span>SYSTEM STATUS</span>
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      isHealthy ? 'bg-tertiary animate-pulse' : 'bg-error'
+                      totalCount === 0
+                        ? 'bg-[#908fa0]'
+                        : isHealthy
+                        ? 'bg-tertiary animate-pulse'
+                        : 'bg-error'
                     }`}
                   />
                 </div>
-                <div className="text-lg font-semibold text-[#e4e1e6]">
-                  {isHealthy ? 'Operational' : 'Degraded Outage'}
+                <div className="text-base sm:text-lg font-semibold text-[#e4e1e6] truncate">
+                  {totalCount === 0 ? 'No Monitors' : isHealthy ? 'Operational' : 'Degraded Outage'}
                 </div>
-                <div className="text-xs font-mono text-tertiary">
-                  {isHealthy ? 'All systems normal' : `${downCount} endpoint failed`}
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
-                <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
-                  <span>OVERALL UPTIME</span>
-                  <Activity className="w-4 h-4 text-tertiary" />
-                </div>
-                <div className="text-lg font-semibold text-tertiary">
-                  99.98%
-                </div>
-                <div className="text-xs font-mono text-[#908fa0]">
-                  Rolling 30-day window
+                <div className="text-[11px] font-mono text-tertiary truncate">
+                  {totalCount === 0 ? 'Add a monitor' : isHealthy ? 'All systems normal' : `${downCount} monitor failing`}
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
-                <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
-                  <span>AVG RESPONSE</span>
-                  <span className="text-xs text-secondary font-medium">p50: 24ms</span>
+              <div className="p-3 sm:p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0]">
+                  <span>FLEET HEALTH</span>
+                  <Activity className="w-3.5 h-3.5 text-tertiary" />
                 </div>
-                <div className="text-lg font-semibold text-secondary">
-                  28 ms
+                <div className="text-base sm:text-lg font-semibold text-tertiary">
+                  {fleetUptime}
                 </div>
-                <div className="text-xs font-mono text-[#908fa0]">
-                  Global edge average
+                <div className="text-[11px] font-mono text-[#908fa0] truncate">
+                  {totalCount > 0 ? `${upCount} of ${totalCount} UP` : 'Awaiting monitors'}
                 </div>
               </div>
 
-              {/* 24H Response Time Trend Graph */}
-              <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] flex flex-col justify-between">
-                <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
-                  <span>24H LATENCY TREND</span>
-                  <span className="text-tertiary font-medium">24ms avg</span>
+              <div className="p-3 sm:p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0]">
+                  <span>MONITORS</span>
+                  <span className="text-[10px] text-secondary font-mono">{availableGroups.length} groups</span>
                 </div>
-                <div className="h-10 w-full pt-1">
-                  <svg className="w-full h-full text-secondary" fill="none" preserveAspectRatio="none" viewBox="0 0 100 30">
-                    <defs>
-                      <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#7bd0ff" stopOpacity="0.25" />
-                        <stop offset="100%" stopColor="#7bd0ff" stopOpacity="0.0" />
-                      </linearGradient>
-                    </defs>
-                    <path
-                      d="M0,22 Q25,12 50,18 T100,8 L100,30 L0,30 Z"
-                      fill="url(#trendGrad)"
-                    />
-                    <path
-                      d="M0,22 Q25,12 50,18 T100,8"
-                      stroke="#7bd0ff"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+                <div className="text-base sm:text-lg font-semibold text-secondary">
+                  {totalCount} Active
+                </div>
+                <div className="text-[11px] font-mono text-[#908fa0] truncate">
+                  {pendingCount > 0 ? `${pendingCount} verifying` : 'Automated pinger'}
+                </div>
+              </div>
+
+              <div className="p-3 sm:p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0]">
+                  <span>OUTAGES</span>
+                  <ShieldAlert className={`w-3.5 h-3.5 ${downCount > 0 ? 'text-error' : 'text-[#908fa0]'}`} />
+                </div>
+                <div className={`text-base sm:text-lg font-semibold ${downCount > 0 ? 'text-error' : 'text-[#e4e1e6]'}`}>
+                  {downCount === 0 ? '0 Incidents' : `${downCount} Down`}
+                </div>
+                <div className="text-[11px] font-mono text-[#908fa0] truncate">
+                  {downCount > 0 ? 'Incident opened' : 'No outages active'}
                 </div>
               </div>
             </div>
@@ -515,7 +481,12 @@ const DashboardApp: React.FC = () => {
 
             {/* Clean Monitors List */}
             <div className="space-y-3">
-              {filteredEndpoints.length === 0 ? (
+              {!hasLoaded ? (
+                <div className="p-8 text-center rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] text-xs font-mono text-[#908fa0] flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-primary" />
+                  <span>Loading monitors from Go backend...</span>
+                </div>
+              ) : filteredEndpoints.length === 0 ? (
                 <div className="p-8 text-center rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] text-xs font-mono text-[#908fa0]">
                   No monitors found. Click &quot;Add Monitor&quot; to begin tracking an HTTP(S) endpoint.
                 </div>
@@ -526,27 +497,31 @@ const DashboardApp: React.FC = () => {
                     <div
                       key={ep.endpointId}
                       onClick={() => setSelectedEndpoint(ep)}
-                      className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] hover:border-primary/50 hover:bg-[#202024] cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 group"
-                      title="Click to inspect recent pings & latency graph"
+                      className="p-3.5 sm:p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] hover:border-primary/50 hover:bg-[#202024] cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 group"
+                      title="Click to inspect response graph & live pings"
                     >
                       {/* Left: Indicator + Name & URL & Collection Tag */}
-                      <div className="flex items-start sm:items-center gap-3 min-w-[260px]">
+                      <div className="flex items-start sm:items-center gap-3 min-w-0">
                         <span
                           className={`mt-1 sm:mt-0 w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                             isDown
                               ? 'bg-error shadow-[0_0_8px_rgba(255,180,171,0.6)]'
+                              : ep.status === 'PENDING'
+                              ? 'bg-secondary animate-pulse'
                               : 'bg-tertiary shadow-[0_0_8px_rgba(78,222,163,0.5)]'
                           }`}
                         />
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-sm text-[#e4e1e6] group-hover:text-primary transition-colors">
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                            <span className="font-medium text-sm text-[#e4e1e6] group-hover:text-primary transition-colors truncate">
                               {ep.name}
                             </span>
                             <span
                               className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-medium ${
                                 isDown
                                   ? 'bg-[#690005] text-[#ffb4ab]'
+                                  : ep.status === 'PENDING'
+                                  ? 'bg-[#2a2a2d] text-secondary'
                                   : 'bg-[#002113] text-tertiary'
                               }`}
                             >
@@ -559,13 +534,13 @@ const DashboardApp: React.FC = () => {
                             )}
                           </div>
                           <div className="text-xs font-mono text-[#908fa0] flex items-center gap-1.5">
-                            <span className="truncate max-w-[280px]">{ep.url}</span>
+                            <span className="truncate max-w-[200px] sm:max-w-xs md:max-w-md">{ep.url}</span>
                             <a
                               href={ep.url}
                               target="_blank"
                               rel="noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              className="text-[#908fa0] hover:text-secondary"
+                              className="text-[#908fa0] hover:text-secondary flex-shrink-0"
                               title="Open URL"
                             >
                               <ExternalLink className="w-3 h-3" />
@@ -574,35 +549,13 @@ const DashboardApp: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Middle: 30-Day Mini Bar Strip (Straightforward & Clean) */}
-                      <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-[2px]" title="30-day availability history">
-                          {Array.from({ length: 30 }).map((_, i) => {
-                            const isBlip = isDown && i === 29;
-                            return (
-                              <span
-                                key={i}
-                                className={`w-[3px] h-4 rounded-full transition-colors ${
-                                  isBlip
-                                    ? 'bg-error'
-                                    : 'bg-tertiary/70 hover:bg-tertiary'
-                                }`}
-                              />
-                            );
-                          })}
-                        </div>
-                        <span className="text-[11px] font-mono text-[#908fa0] min-w-[45px] text-right">
-                          {isDown ? '96.6%' : '100%'}
-                        </span>
-                      </div>
-
-                      {/* Right: Latency + Interval + Delete */}
-                      <div className="flex items-center justify-between sm:justify-end gap-4 text-xs font-mono">
-                        <span className="text-[#c7c4d7] bg-[#2a2a2d] px-2 py-1 rounded">
-                          24 ms
-                        </span>
+                      {/* Right: Cadence + Inspection cue + Delete */}
+                      <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 text-xs font-mono flex-shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-[#2a2a2d]/50">
                         <span className="text-[#908fa0]">
                           Every {ep.frequencyMin}m
+                        </span>
+                        <span className="text-[11px] text-secondary/80 hidden sm:inline group-hover:text-secondary">
+                          View details &rarr;
                         </span>
                         <button
                           onClick={(e) => {
@@ -814,7 +767,7 @@ const DashboardApp: React.FC = () => {
       {selectedEndpoint && (
         <EndpointDetailModal
           endpoint={selectedEndpoint}
-          tenantId={user?.tenantId || 'demo'}
+          tenantId={selectedEndpoint.tenantId || user?.tenantId || 'demo'}
           onClose={() => setSelectedEndpoint(null)}
         />
       )}

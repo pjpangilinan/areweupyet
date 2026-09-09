@@ -25,7 +25,8 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
       setLoading(true);
       setFetchError(null);
       try {
-        const res = await fetchEndpointHistory(tenantId || 'demo', endpoint.endpointId);
+        const resolvedTenant = endpoint.tenantId || tenantId || 'demo';
+        const res = await fetchEndpointHistory(resolvedTenant, endpoint.endpointId);
         if (mounted) {
           setHistory(res);
         }
@@ -42,7 +43,7 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
     return () => {
       mounted = false;
     };
-  }, [endpoint.endpointId, tenantId]);
+  }, [endpoint.endpointId, endpoint.tenantId, tenantId]);
 
   const pings = history?.recentPings || [];
   const hasPings = pings.length > 0;
@@ -78,17 +79,19 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
   const chartPaths = generatePath();
 
   return (
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-[#1b1b1e] border border-[#2a2a2d] rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-6 shadow-2xl">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50">
+      <div className="bg-[#1b1b1e] border border-[#2a2a2d] rounded-xl sm:rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 space-y-5 shadow-2xl">
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-[#2a2a2d] pb-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-lg text-[#e4e1e6]">{endpoint.name}</h3>
+        <div className="flex items-start justify-between border-b border-[#2a2a2d] pb-3 sm:pb-4 gap-3">
+          <div className="space-y-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold text-base sm:text-lg text-[#e4e1e6] truncate">{endpoint.name}</h3>
               <span
                 className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${
                   isDown
                     ? 'bg-[#690005] text-[#ffb4ab] border border-[#93000a]'
+                    : endpoint.status === 'PENDING'
+                    ? 'bg-[#2a2a2d] text-secondary border border-[#3a3a3d]'
                     : 'bg-[#002113] text-tertiary border border-[#005236]'
                 }`}
               >
@@ -100,43 +103,43 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
                 </span>
               )}
             </div>
-            <div className="text-xs font-mono text-[#908fa0]">{endpoint.url}</div>
+            <div className="text-xs font-mono text-[#908fa0] truncate max-w-md">{endpoint.url}</div>
           </div>
-          <button onClick={onClose} className="text-[#908fa0] hover:text-[#e4e1e6] p-1">
+          <button onClick={onClose} className="text-[#908fa0] hover:text-[#e4e1e6] p-1.5 flex-shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Quick Stats Grid */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
-            <div className="text-[11px] font-mono text-[#908fa0]">CHECK FREQUENCY</div>
-            <div className="text-base font-semibold text-[#e4e1e6] mt-0.5">
+        {/* Quick Stats Grid (Responsive 3 cols) */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="p-2.5 sm:p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
+            <div className="text-[10px] sm:text-[11px] font-mono text-[#908fa0]">CHECK CADENCE</div>
+            <div className="text-xs sm:text-base font-semibold text-[#e4e1e6] mt-0.5">
               Every {endpoint.frequencyMin}m
             </div>
           </div>
-          <div className="p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
-            <div className="text-[11px] font-mono text-[#908fa0]">AVG RESPONSE</div>
-            <div className="text-base font-semibold text-secondary mt-0.5">
+          <div className="p-2.5 sm:p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
+            <div className="text-[10px] sm:text-[11px] font-mono text-[#908fa0]">AVG LATENCY</div>
+            <div className="text-xs sm:text-base font-semibold text-secondary mt-0.5">
               {hasPings ? `${avgLatency} ms` : '—'}
             </div>
           </div>
-          <div className="p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
-            <div className="text-[11px] font-mono text-[#908fa0]">24H UPTIME</div>
-            <div className="text-base font-semibold text-tertiary mt-0.5">
-              {history?.uptime24h?.formattedUptime || (isDown ? '0.00%' : '100.00%')}
+          <div className="p-2.5 sm:p-3 rounded-xl bg-[#131316] border border-[#2a2a2d]">
+            <div className="text-[10px] sm:text-[11px] font-mono text-[#908fa0]">24H UPTIME</div>
+            <div className="text-xs sm:text-base font-semibold text-tertiary mt-0.5">
+              {hasPings ? (history?.uptime24h?.formattedUptime || '100.00%') : isDown ? '0.00%' : '—'}
             </div>
           </div>
         </div>
 
         {/* The Response Time Graph */}
-        <div className="p-4 rounded-xl bg-[#131316] border border-[#2a2a2d] space-y-2">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#131316] border border-[#2a2a2d] space-y-2">
           <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-[#c7c4d7]">Response Time History & Latency Trend</span>
+            <span className="text-[#c7c4d7]">Response Time & Latency Trend</span>
             <span className="text-secondary">{hasPings ? `Average: ${avgLatency}ms` : 'Awaiting Check'}</span>
           </div>
 
-          <div className="relative w-full h-28 overflow-hidden rounded bg-[#0e0e11]/60 p-2 flex items-center justify-center">
+          <div className="relative w-full h-24 sm:h-28 overflow-hidden rounded bg-[#0e0e11]/60 p-2 flex items-center justify-center">
             {hasPings ? (
               <svg className="w-full h-full text-secondary" fill="none" preserveAspectRatio="none" viewBox="0 0 240 60">
                 <defs>
@@ -149,9 +152,9 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
                 <path d={chartPaths.line} stroke="#7bd0ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             ) : (
-              <div className="text-xs font-mono text-[#908fa0] flex items-center gap-2">
-                <Clock className="w-4 h-4 text-[#908fa0]" />
-                <span>No ping samples logged yet. Local dispatcher runs every 10 seconds.</span>
+              <div className="text-xs font-mono text-[#908fa0] flex items-center gap-2 text-center px-4">
+                <Clock className="w-4 h-4 text-[#908fa0] flex-shrink-0" />
+                <span>No ping samples logged yet. Background checks run periodically.</span>
               </div>
             )}
           </div>
@@ -186,7 +189,7 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
             {!hasPings ? (
               <div className="p-6 text-center text-xs font-mono text-[#908fa0] space-y-1">
                 <p>No checks recorded yet in Go backend.</p>
-                <p className="text-[11px] text-[#717079]">The dispatcher checks due endpoints every 10 seconds locally.</p>
+                <p className="text-[11px] text-[#717079]">Automated checks run on your configured frequency interval.</p>
               </div>
             ) : (
               pings.map((p, idx) => {
@@ -194,23 +197,21 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
                 return (
                   <div
                     key={idx}
-                    className="p-2.5 px-4 flex items-center justify-between text-xs font-mono hover:bg-[#1b1b1e] transition-colors"
+                    className="p-2.5 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2 text-xs font-mono hover:bg-[#1b1b1e] transition-colors"
                   >
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2">
                       {pass ? (
                         <CheckCircle2 className="w-4 h-4 text-tertiary flex-shrink-0" />
                       ) : (
                         <AlertCircle className="w-4 h-4 text-error flex-shrink-0" />
                       )}
-                      <div>
-                        <span className="text-[#e4e1e6] font-medium">HTTP {p.statusCode || 'FAIL'}</span>
-                        <span className="text-[11px] text-[#908fa0] ml-2">
-                          {new Date(p.checkedAt).toLocaleTimeString()}
-                        </span>
-                      </div>
+                      <span className="text-[#e4e1e6] font-medium">HTTP {p.statusCode || 'FAIL'}</span>
+                      <span className="text-[11px] text-[#908fa0]">
+                        {new Date(p.checkedAt).toLocaleTimeString()}
+                      </span>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2.5 self-end sm:self-auto">
                       <span className="px-2 py-0.5 rounded bg-[#2a2a2d] text-[#c7c4d7]">
                         {p.latencyMs} ms
                       </span>
@@ -230,9 +231,9 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
         </div>
 
         {/* Security / SSL Guard Status */}
-        <div className="p-3 rounded-xl bg-[#131316] border border-[#2a2a2d] flex items-center justify-between text-xs font-mono">
+        <div className="p-3 rounded-xl bg-[#131316] border border-[#2a2a2d] flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] sm:text-xs font-mono">
           <div className="flex items-center gap-2 text-tertiary">
-            <ShieldCheck className="w-4 h-4" />
+            <ShieldCheck className="w-4 h-4 flex-shrink-0" />
             <span>SSRF Guard active & connect-time IP validated</span>
           </div>
           <span className="text-[#908fa0]">Agent: AreWeUpYet-Monitor/1.0</span>
