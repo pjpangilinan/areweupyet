@@ -1,38 +1,50 @@
-name: CI
+name: CI Quality Gate
 
 on:
   push:
-    branches: [ main ]
+    branches: [master, main]
   pull_request:
-    branches: [ main ]
+    branches: [master, main]
 
 jobs:
-  backend-test:
-    name: Go Tests & Build
+  test:
+    name: Test & Build Quality Gate
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.22
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-      - name: Run Go Tests
-        run: go test -v -race ./internal/... ./cmd/...
-      - name: Build Go Binaries
-        run: go build -v ./cmd/...
+          go-version: '1.22'
+          cache: true
 
-  frontend-check:
-    name: Frontend Typecheck & Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Node
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
+          cache: 'npm'
+
       - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: Build Frontend
-        working-directory: frontend
-        run: npm run build
+        run: |
+          npm ci
+          cd frontend && npm ci
+
+      - name: Run Go Unit Tests
+        run: go test -v ./internal/... ./cmd/...
+
+      - name: Verify Go Lambda Cross-Compilation
+        run: |
+          mkdir -p dist/dispatcher dist/api-private dist/api-public dist/notifier
+          GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/dispatcher/bootstrap ./cmd/dispatcher
+          GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/api-private/bootstrap ./cmd/api-private
+          GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/api-public/bootstrap ./cmd/api-public
+          GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/notifier/bootstrap ./cmd/notifier
+
+      - name: Verify Amplify CDK Typecheck
+        run: npx tsc --noEmit -p amplify/tsconfig.json
+
+      - name: Verify Frontend Production Build
+        run: npm run build:frontend

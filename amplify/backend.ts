@@ -1,6 +1,7 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { DynamoDbTables } from './data/dynamodb';
+import { LambdaFunctions } from './functions/lambdas';
 import { DispatcherMonitoring } from './monitoring/alarms';
 import { FreeTierBudget } from './monitoring/budget';
 
@@ -19,7 +20,16 @@ export const backend = defineBackend({
 });
 
 // Custom CDK DynamoDB stack (Always-Free tier DynamoDB tables)
-new DynamoDbTables(backend.createStack('DynamoDbStack'), 'AreWeUpYetData');
+const dataStack = backend.createStack('DynamoDbStack');
+const dataTables = new DynamoDbTables(dataStack, 'AreWeUpYetData');
+
+// Custom CDK Go Lambda functions (Dispatcher, Private API, Public API, Notifier)
+const functionsStack = backend.createStack('FunctionsStack');
+new LambdaFunctions(functionsStack, 'AreWeUpYetFunctions', {
+  endpointsTable: dataTables.endpointsTable,
+  pingResultsTable: dataTables.pingResultsTable,
+  incidentsTable: dataTables.incidentsTable,
+});
 
 // Watch the watcher: CloudWatch alarm on dispatcher failure
 new DispatcherMonitoring(backend.createStack('MonitoringStack'), 'AreWeUpYetMonitoring');

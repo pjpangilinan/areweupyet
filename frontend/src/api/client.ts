@@ -1,6 +1,5 @@
 import type { Endpoint } from '../types';
-
-const API_BASE = 'http://localhost:8080';
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') || 'http://localhost:8080';
 
 export interface PublicStatusResponse {
   tenantId: string;

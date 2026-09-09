@@ -7,7 +7,8 @@
     "dev:backend": "go run ./cmd/local-dev",
     "build:frontend": "npm run build --prefix frontend",
     "test:go": "go test -v ./internal/... ./cmd/...",
-    "build:go": "go build ./cmd/..."
+    "build:go": "go build ./cmd/...",
+    "build:lambdas": "go build -tags lambda.norpc -o dist/dispatcher/bootstrap ./cmd/dispatcher && go build -tags lambda.norpc -o dist/api-private/bootstrap ./cmd/api-private && go build -tags lambda.norpc -o dist/api-public/bootstrap ./cmd/api-public && go build -tags lambda.norpc -o dist/notifier/bootstrap ./cmd/notifier"
   },
   "devDependencies": {
     "@aws-amplify/backend": "^1.14.0",
