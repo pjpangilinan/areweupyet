@@ -17,6 +17,9 @@ export interface PublicStatusResponse {
   endpoints: Array<{
     endpointId: string;
     name: string;
+    url?: string;
+    group?: string;
+    frequencyMin?: number;
     status: 'UP' | 'DOWN' | 'PENDING';
     lastCheckedAt?: string;
     incidentCount?: number;

@@ -4,7 +4,12 @@ skills-lock.json
 AGENTS.md
 
 # Documentation & reference screens
-docs/
+docs/*
+!docs/screenshots/
+
+# Handoff notes
+HANDOFF.md
+*handoff*.md
 
 # Dependencies & build outputs
 node_modules/

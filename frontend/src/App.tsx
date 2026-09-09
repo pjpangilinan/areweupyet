@@ -241,11 +241,13 @@ const DashboardApp: React.FC = () => {
       ? window.location.hash.replace('#/status/', '').trim()
       : '';
     const statusTenantId = hashTenant || (user ? user.tenantId : '');
+    const isOwner = Boolean(user && user.tenantId && user.tenantId === statusTenantId);
     return (
       <div className="min-h-screen bg-[#131316] text-[#e4e1e6] py-8 px-4">
         <StatusPage
           tenantId={statusTenantId}
-          endpoints={endpoints}
+          endpoints={isOwner ? endpoints : undefined}
+          isOwner={isOwner}
           onBack={() => {
             window.location.hash = '';
             setCurrentTab('monitors');
@@ -307,7 +309,12 @@ const DashboardApp: React.FC = () => {
               <span className="hidden sm:inline">Alerts & Webhooks</span>
             </button>
             <button
-              onClick={() => setCurrentTab('status-page')}
+              onClick={() => {
+                if (user?.tenantId) {
+                  window.location.hash = `#/status/${user.tenantId}`;
+                }
+                setCurrentTab('status-page');
+              }}
               className="hidden md:flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-[#908fa0] hover:text-[#e4e1e6] hover:bg-[#1f1f22] transition-colors"
             >
               <span>Public Status</span>
@@ -702,7 +709,15 @@ const DashboardApp: React.FC = () => {
           <span>AreWeUpYet Synthetic Uptime Telemetry</span>
         </div>
         <div className="flex items-center space-x-4">
-          <button onClick={() => setCurrentTab('status-page')} className="hover:text-[#e4e1e6] transition-colors">
+          <button
+            onClick={() => {
+              if (user?.tenantId) {
+                window.location.hash = `#/status/${user.tenantId}`;
+              }
+              setCurrentTab('status-page');
+            }}
+            className="hover:text-[#e4e1e6] transition-colors"
+          >
             Status Page
           </button>
           <button onClick={() => setCurrentTab('terms')} className="hover:text-[#e4e1e6] transition-colors">
@@ -810,6 +825,7 @@ const DashboardApp: React.FC = () => {
         <EndpointDetailModal
           endpoint={selectedEndpoint}
           tenantId={selectedEndpoint.tenantId || user?.tenantId || ''}
+          token={user?.token}
           onClose={() => setSelectedEndpoint(null)}
           onEndpointUpdated={(updated) => {
             setEndpoints((prev) => prev.map((e) => (e.endpointId === updated.endpointId ? updated : e)));

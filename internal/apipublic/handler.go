@@ -3,7 +3,10 @@ package apipublic
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"areweupyet/internal/accounting"
@@ -12,17 +15,79 @@ import (
 )
 
 type Server struct {
-	store dynamo.Store
-	mux   *http.ServeMux
+	store       dynamo.Store
+	mux         *http.ServeMux
+	rateLimiter *rateLimiter
+}
+
+type rateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*clientBucket
+}
+
+type clientBucket struct {
+	count     int
+	resetTime time.Time
+}
+
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{
+		buckets: make(map[string]*clientBucket),
+	}
+}
+
+func (rl *rateLimiter) allow(ip string, limit int, window time.Duration) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	if len(rl.buckets) > 1000 {
+		for k, b := range rl.buckets {
+			if now.After(b.resetTime) {
+				delete(rl.buckets, k)
+			}
+		}
+	}
+
+	b, exists := rl.buckets[ip]
+	if !exists || now.After(b.resetTime) {
+		rl.buckets[ip] = &clientBucket{
+			count:     1,
+			resetTime: now.Add(window),
+		}
+		return true
+	}
+
+	if b.count >= limit {
+		return false
+	}
+
+	b.count++
+	return true
+}
+
+func extractClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // PublicEndpointSummary exposes safe public status without sensitive configuration.
 type PublicEndpointSummary struct {
-	EndpointID      string           `json:"endpointId"`
-	Name            string           `json:"name"`
-	Status          string           `json:"status"` // "UP" | "DOWN" | "PENDING"
-	LastCheckedAt   time.Time        `json:"lastCheckedAt"`
-	ActiveIncident  *models.Incident `json:"activeIncident,omitempty"`
+	EndpointID     string           `json:"endpointId"`
+	Name           string           `json:"name"`
+	URL            string           `json:"url,omitempty"`
+	Group          string           `json:"group,omitempty"`
+	FrequencyMin   int              `json:"frequencyMin,omitempty"`
+	Status         string           `json:"status"` // "UP" | "DOWN" | "PENDING"
+	LastCheckedAt  time.Time        `json:"lastCheckedAt"`
+	ActiveIncident *models.Incident `json:"activeIncident,omitempty"`
 }
 
 // TenantPublicStatus aggregates whole-system health for a tenant.
@@ -46,14 +111,23 @@ type EndpointHistoryResponse struct {
 // NewServer initializes public unauthenticated status server.
 func NewServer(store dynamo.Store) *Server {
 	s := &Server{
-		store: store,
-		mux:   http.NewServeMux(),
+		store:       store,
+		mux:         http.NewServeMux(),
+		rateLimiter: newRateLimiter(),
 	}
 	s.routes()
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ip := extractClientIP(r)
+	if !s.rateLimiter.allow(ip, 60, 1*time.Minute) {
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": "Rate limit exceeded. Please wait before making more requests.",
+		})
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -83,6 +157,9 @@ func (s *Server) handleGetTenantStatus(w http.ResponseWriter, r *http.Request) {
 		summary := PublicEndpointSummary{
 			EndpointID:    ep.EndpointID,
 			Name:          ep.Name,
+			URL:           ep.URL,
+			Group:         ep.Group,
+			FrequencyMin:  ep.FrequencyMin,
 			Status:        ep.Status,
 			LastCheckedAt: ep.UpdatedAt,
 		}
@@ -133,7 +210,7 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pings, _ := s.store.ListPingResults(r.Context(), ep.EndpointID, 30)
+	pings, _ := s.store.ListPingResults(r.Context(), ep.EndpointID, 5)
 	if pings == nil {
 		pings = []models.PingResult{}
 	}

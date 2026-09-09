@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"areweupyet/internal/checker"
@@ -18,9 +20,57 @@ import (
 	"areweupyet/internal/webhook"
 )
 
+type rateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*clientBucket
+}
+
+type clientBucket struct {
+	count     int
+	resetTime time.Time
+}
+
+func newRateLimiter() *rateLimiter {
+	return &rateLimiter{
+		buckets: make(map[string]*clientBucket),
+	}
+}
+
+func (rl *rateLimiter) allow(key string, limit int, window time.Duration) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	if len(rl.buckets) > 1000 {
+		for k, b := range rl.buckets {
+			if now.After(b.resetTime) {
+				delete(rl.buckets, k)
+			}
+		}
+	}
+
+	b, exists := rl.buckets[key]
+	if !exists || now.After(b.resetTime) {
+		rl.buckets[key] = &clientBucket{
+			count:     1,
+			resetTime: now.Add(window),
+		}
+		return true
+	}
+
+	if b.count >= limit {
+		return false
+	}
+
+	b.count++
+	return true
+}
+
 type Server struct {
-	store dynamo.Store
-	mux   *http.ServeMux
+	store              dynamo.Store
+	mux                *http.ServeMux
+	tenantCheckLimiter *rateLimiter
+	webhookTestLimiter *rateLimiter
 }
 
 type CreateEndpointRequest struct {
@@ -49,8 +99,10 @@ type TestWebhookRequest struct {
 // NewServer initializes the HTTP router for private tenant operations.
 func NewServer(store dynamo.Store) *Server {
 	s := &Server{
-		store: store,
-		mux:   http.NewServeMux(),
+		store:              store,
+		mux:                http.NewServeMux(),
+		tenantCheckLimiter: newRateLimiter(),
+		webhookTestLimiter: newRateLimiter(),
 	}
 	s.routes()
 	return s
@@ -71,16 +123,13 @@ func (s *Server) routes() {
 }
 
 // extractTenantID retrieves the authenticated tenant ID from context, headers, or Bearer JWT.
+// In AWS Lambda production, a valid Bearer token (or authorizer context) is strictly required.
 func extractTenantID(r *http.Request) (string, error) {
 	// 1. From context (set by Lambda authorizer adapter)
 	if tenantID, ok := r.Context().Value("tenantId").(string); ok && tenantID != "" {
 		return tenantID, nil
 	}
-	// 2. From header (for testing/local development)
-	if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-		return tenantID, nil
-	}
-	// 3. From Authorization: Bearer <token>
+	// 2. From Authorization: Bearer <token>
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 		token := strings.TrimSpace(authHeader[7:])
@@ -88,8 +137,15 @@ func extractTenantID(r *http.Request) (string, error) {
 			return sub, nil
 		}
 	}
-	// 4. Default to "demo" so local development and unauthenticated test runs work seamlessly
-	return "demo", nil
+	// 3. For local development or testing only (when not in AWS Lambda)
+	isAWS := os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != ""
+	if !isAWS {
+		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
+			return tenantID, nil
+		}
+		return "demo", nil
+	}
+	return "", errors.New("unauthorized: valid session token required")
 }
 
 func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +185,22 @@ func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	if len(req.Name) > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name cannot exceed 100 characters"})
+		return
+	}
+
+	req.URL = strings.TrimSpace(req.URL)
+	if len(req.URL) > 2048 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL cannot exceed 2048 characters"})
+		return
+	}
+
+	req.Group = strings.TrimSpace(req.Group)
+	if len(req.Group) > 50 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group cannot exceed 50 characters"})
+		return
+	}
 
 	// 1. SSRF and URL validation
 	if _, err := ssrfguard.ValidateTargetURL(req.URL); err != nil {
@@ -136,16 +208,16 @@ func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Enforce frequency floor (5 minutes)
-	if req.FrequencyMin < 5 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "check frequency floor is 5 minutes"})
+	// 2. Enforce frequency floor (5 minutes) and ceiling (1440 minutes)
+	if req.FrequencyMin < 5 || req.FrequencyMin > 1440 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "check frequency floor is 5 minutes (maximum 1440 minutes)"})
 		return
 	}
 
-	if req.TimeoutSec <= 0 {
+	if req.TimeoutSec <= 0 || req.TimeoutSec > 30 {
 		req.TimeoutSec = 10
 	}
-	if req.ExpectedStatus <= 0 {
+	if req.ExpectedStatus < 100 || req.ExpectedStatus > 599 {
 		req.ExpectedStatus = 200
 	}
 
@@ -228,30 +300,51 @@ func (s *Server) handleUpdateEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Name != "" {
-		existing.Name = strings.TrimSpace(req.Name)
+		trimmedName := strings.TrimSpace(req.Name)
+		if len(trimmedName) > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name cannot exceed 100 characters"})
+			return
+		}
+		existing.Name = trimmedName
 	}
 	if req.URL != "" {
-		if _, err := ssrfguard.ValidateTargetURL(req.URL); err != nil {
+		trimmedURL := strings.TrimSpace(req.URL)
+		if len(trimmedURL) > 2048 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL cannot exceed 2048 characters"})
+			return
+		}
+		if _, err := ssrfguard.ValidateTargetURL(trimmedURL); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid URL: %v", err)})
 			return
 		}
-		existing.URL = req.URL
+		existing.URL = trimmedURL
 	}
 	if req.FrequencyMin > 0 {
-		if req.FrequencyMin < 5 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "check frequency floor is 5 minutes"})
+		if req.FrequencyMin < 5 || req.FrequencyMin > 1440 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "check frequency floor is 5 minutes (maximum 1440 minutes)"})
 			return
 		}
 		existing.FrequencyMin = req.FrequencyMin
 	}
 	if req.TimeoutSec > 0 {
+		if req.TimeoutSec > 30 {
+			req.TimeoutSec = 10
+		}
 		existing.TimeoutSec = req.TimeoutSec
 	}
 	if req.ExpectedStatus > 0 {
+		if req.ExpectedStatus < 100 || req.ExpectedStatus > 599 {
+			req.ExpectedStatus = 200
+		}
 		existing.ExpectedStatus = req.ExpectedStatus
 	}
 	if req.Group != "" {
-		existing.Group = strings.TrimSpace(req.Group)
+		trimmedGroup := strings.TrimSpace(req.Group)
+		if len(trimmedGroup) > 50 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group cannot exceed 50 characters"})
+			return
+		}
+		existing.Group = trimmedGroup
 	}
 	existing.UpdatedAt = time.Now().UTC()
 
@@ -306,6 +399,16 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to query endpoint"})
+		return
+	}
+
+	// 1. Workspace-wide rate limit safeguard: max 1 manual check every 5 seconds across tenant
+	if !s.tenantCheckLimiter.allow(tenantID, 1, 5*time.Second) {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error":             "Rate limit guard: please wait at least 5 seconds between manual checks across your workspace.",
+			"retryAfterSeconds": 5,
+		})
 		return
 	}
 
@@ -413,6 +516,16 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	if _, err := ssrfguard.ValidateTargetURL(req.URL); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "SSRF Guard: Webhook destination blocked: " + err.Error(),
+		})
+		return
+	}
+
+	// Rate limit safeguard: max 2 webhook tests every 10 seconds per tenant
+	if !s.webhookTestLimiter.allow(tenantID, 2, 10*time.Second) {
+		w.Header().Set("Retry-After", "10")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error":             "Rate limit: Please wait 10 seconds between webhook tests.",
+			"retryAfterSeconds": 10,
 		})
 		return
 	}

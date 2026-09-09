@@ -97,5 +97,5 @@ func TestPublicAPI_LambdaAdapter(t *testing.T) {
 	res, err := HandleLambdaRequest(context.Background(), server, lambdaReq)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, res.StatusCode)
-	assert.Equal(t, "*", res.Headers["Access-Control-Allow-Origin"])
+	assert.Contains(t, res.Headers["Content-Type"], "application/json")
 }

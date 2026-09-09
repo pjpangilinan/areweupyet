@@ -7,6 +7,7 @@ interface EndpointDetailModalProps {
   endpoint: Endpoint;
   tenantId: string;
   token?: string;
+  readOnly?: boolean;
   onClose: () => void;
   onEndpointUpdated?: (ep: Endpoint) => void;
 }
@@ -15,6 +16,7 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
   endpoint: initialEndpoint,
   tenantId,
   token,
+  readOnly = false,
   onClose,
   onEndpointUpdated,
 }) => {
@@ -83,6 +85,7 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
   };
 
   const pings = history?.recentPings || [];
+  const latestPings = pings.slice(0, 5);
   const hasPings = pings.length > 0;
   const avgLatency = hasPings
     ? Math.round(pings.reduce((sum, p) => sum + p.latencyMs, 0) / pings.length)
@@ -147,32 +150,44 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
           </button>
         </div>
 
-        {/* Instant Check Action Bar with 30s Anti-Abuse Rate Limit Guard */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#131316] p-3 rounded-xl border border-[#2a2a2d]">
-          <div className="text-xs font-mono text-[#908fa0] flex items-center gap-2">
-            <Clock className="w-3.5 h-3.5 text-primary flex-shrink-0" />
-            <span>Automated Cadence: Every {endpoint.frequencyMin}m</span>
-            {cooldown > 0 && (
-              <span className="text-secondary font-semibold">({cooldown}s cooldown)</span>
-            )}
-          </div>
+        {/* Instant Check Action Bar with Rate Limit Guard (or View-Only badge) */}
+        {!readOnly ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-[#131316] p-3 rounded-xl border border-[#2a2a2d]">
+            <div className="text-xs font-mono text-[#908fa0] flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+              <span>Automated Cadence: Every {endpoint.frequencyMin || 5}m</span>
+              {cooldown > 0 && (
+                <span className="text-secondary font-semibold">({cooldown}s cooldown)</span>
+              )}
+            </div>
 
-          <button
-            onClick={handleCheckNow}
-            disabled={isChecking || cooldown > 0}
-            className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors ${
-              cooldown > 0
-                ? 'bg-[#2a2a2d] text-[#717079] cursor-not-allowed'
-                : isChecking
-                ? 'bg-primary/50 text-[#1000a9] cursor-wait'
-                : 'bg-primary text-[#1000a9] hover:bg-white cursor-pointer shadow-sm'
-            }`}
-            title={cooldown > 0 ? `Rate limit safeguard: wait ${cooldown}s` : 'Trigger instant synthetic check'}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
-            <span>{isChecking ? 'Checking...' : cooldown > 0 ? `Cooldown (${cooldown}s)` : 'Run Check Now'}</span>
-          </button>
-        </div>
+            <button
+              onClick={handleCheckNow}
+              disabled={isChecking || cooldown > 0}
+              className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors ${
+                cooldown > 0
+                  ? 'bg-[#2a2a2d] text-[#717079] cursor-not-allowed'
+                  : isChecking
+                  ? 'bg-primary/50 text-[#1000a9] cursor-wait'
+                  : 'bg-primary text-[#1000a9] hover:bg-white cursor-pointer shadow-sm'
+              }`}
+              title={cooldown > 0 ? `Rate limit safeguard: wait ${cooldown}s` : 'Trigger instant synthetic check'}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
+              <span>{isChecking ? 'Checking...' : cooldown > 0 ? `Cooldown (${cooldown}s)` : 'Run Check Now'}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2.5 bg-[#131316] p-3 rounded-xl border border-[#2a2a2d] text-xs font-mono text-[#908fa0]">
+            <div className="flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+              <span>Continuous Probing: Every {endpoint.frequencyMin || 5}m</span>
+            </div>
+            <span className="text-[11px] text-tertiary bg-[#002113] border border-[#005236] px-2 py-0.5 rounded">
+              Public Telemetry (View Only)
+            </span>
+          </div>
+        )}
 
         {/* Check Result Banner */}
         {checkMsg && (
@@ -248,10 +263,10 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
           )}
         </div>
 
-        {/* Recent Pings Table (Real Outbound HTTP Checks) */}
+        {/* Recent Pings Table (Real Outbound HTTP Checks - Restricted to Latest 5) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-[#c7c4d7]">Recent Synthetic Pings (Live Dispatcher)</span>
+            <span className="text-[#c7c4d7]">Recent Synthetic Pings (Latest 5 Probes)</span>
             {loading && (
               <span className="text-[11px] text-[#908fa0] flex items-center gap-1">
                 <RefreshCw className="w-3 h-3 animate-spin" /> Fetching...
@@ -259,14 +274,14 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
             )}
           </div>
 
-          <div className="rounded-xl border border-[#2a2a2d] bg-[#131316] overflow-hidden divide-y divide-[#2a2a2d] max-h-48 overflow-y-auto">
+          <div className="rounded-xl border border-[#2a2a2d] bg-[#131316] overflow-hidden divide-y divide-[#2a2a2d]">
             {!hasPings ? (
               <div className="p-6 text-center text-xs font-mono text-[#908fa0] space-y-1">
                 <p>No checks recorded yet in Go backend.</p>
                 <p className="text-[11px] text-[#717079]">Automated checks run on your configured frequency interval.</p>
               </div>
             ) : (
-              pings.map((p, idx) => {
+              latestPings.map((p, idx) => {
                 const pass = p.success && p.statusCode >= 200 && p.statusCode < 400;
                 return (
                   <div

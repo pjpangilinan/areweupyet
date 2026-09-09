@@ -61,10 +61,6 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		resHeaders[k] = res.Header.Get(k)
 	}
 
-	// Add CORS headers for public status page readers
-	resHeaders["Access-Control-Allow-Origin"] = "*"
-	resHeaders["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-
 	return events.LambdaFunctionURLResponse{
 		StatusCode: res.StatusCode,
 		Headers:    resHeaders,
