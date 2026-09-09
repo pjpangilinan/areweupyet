@@ -33,7 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
           <img src="/logo.png" alt="AreWeUpYet Logo" className="h-6 w-auto object-contain" />
           <span className="text-outline text-xs font-mono">/</span>
           <span className="text-xs font-mono text-[#e4e1e6] font-medium">
-            {user ? user.tenantId : 'demo'}
+            {user ? (user.name || user.email) : 'Not signed in'}
           </span>
           <ChevronDown className="w-3.5 h-3.5 text-[#908fa0]" />
         </button>

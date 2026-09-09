@@ -6,6 +6,7 @@ import { fetchEndpointHistory, triggerManualCheck, type EndpointHistoryResponse 
 interface EndpointDetailModalProps {
   endpoint: Endpoint;
   tenantId: string;
+  token?: string;
   onClose: () => void;
   onEndpointUpdated?: (ep: Endpoint) => void;
 }
@@ -13,6 +14,7 @@ interface EndpointDetailModalProps {
 export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
   endpoint: initialEndpoint,
   tenantId,
+  token,
   onClose,
   onEndpointUpdated,
 }) => {
@@ -29,18 +31,10 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
     setLoading(true);
     setFetchError(null);
     try {
-      const resolvedTenant = endpoint.tenantId || tenantId || 'demo';
-      try {
-        const res = await fetchEndpointHistory(resolvedTenant, endpoint.endpointId);
-        setHistory(res);
-      } catch (innerErr) {
-        if (resolvedTenant !== 'demo') {
-          const res = await fetchEndpointHistory('demo', endpoint.endpointId);
-          setHistory(res);
-        } else {
-          throw innerErr;
-        }
-      }
+      const resolvedTenant = endpoint.tenantId || tenantId;
+      if (!resolvedTenant) return;
+      const res = await fetchEndpointHistory(resolvedTenant, endpoint.endpointId);
+      setHistory(res);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not fetch check history';
       setFetchError(msg);
@@ -68,17 +62,8 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
     setFetchError(null);
     setCheckMsg(null);
     try {
-      const resolvedTenant = endpoint.tenantId || tenantId || 'demo';
-      let res;
-      try {
-        res = await triggerManualCheck(endpoint.endpointId, undefined, resolvedTenant);
-      } catch (innerErr) {
-        if (resolvedTenant !== 'demo') {
-          res = await triggerManualCheck(endpoint.endpointId, undefined, 'demo');
-        } else {
-          throw innerErr;
-        }
-      }
+      const resolvedTenant = endpoint.tenantId || tenantId;
+      const res = await triggerManualCheck(endpoint.endpointId, token, resolvedTenant);
       setEndpoint(res.endpoint);
       if (onEndpointUpdated) {
         onEndpointUpdated(res.endpoint);

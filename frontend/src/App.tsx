@@ -53,7 +53,7 @@ const DashboardApp: React.FC = () => {
   const [webhookTestError, setWebhookTestError] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
 
-  // Support direct hash routing: #/status/demo opens shareable status page without login
+  // Support direct hash routing: #/status/:tenant opens shareable status page without login
   useEffect(() => {
     const handleHash = () => {
       if (window.location.hash.startsWith('#/status')) {
@@ -67,9 +67,15 @@ const DashboardApp: React.FC = () => {
 
   // Load from backend
   const loadEndpoints = useCallback(async () => {
+    if (!user) {
+      setEndpoints([]);
+      setIsRefreshing(false);
+      setHasLoaded(true);
+      return;
+    }
     setIsRefreshing(true);
     try {
-      const data = await fetchEndpoints(user?.token, user?.tenantId || 'demo');
+      const data = await fetchEndpoints(user.token, user.tenantId);
       setEndpoints(data || []);
     } catch (err) {
       console.warn('Backend fetch error:', err);
@@ -77,7 +83,7 @@ const DashboardApp: React.FC = () => {
       setIsRefreshing(false);
       setHasLoaded(true);
     }
-  }, [user?.token, user?.tenantId]);
+  }, [user]);
 
   useEffect(() => {
     loadEndpoints();
@@ -142,7 +148,7 @@ const DashboardApp: React.FC = () => {
           expectedStatus: 200,
         },
         user?.token,
-        user?.tenantId || 'demo'
+        user?.tenantId
       );
 
       setEndpoints((prev) => [created, ...prev.filter((p) => p.endpointId !== created.endpointId)]);
@@ -162,8 +168,9 @@ const DashboardApp: React.FC = () => {
   // Handle Delete
   const handleDelete = async (endpointId: string) => {
     if (!confirm('Are you sure you want to delete this monitor?')) return;
+    if (!user) return;
     try {
-      await deleteEndpoint(endpointId, user?.token, user?.tenantId || 'demo');
+      await deleteEndpoint(endpointId, user.token, user.tenantId);
     } catch (err) {
       console.warn('Delete error:', err);
     }
@@ -180,6 +187,10 @@ const DashboardApp: React.FC = () => {
   };
 
   const handleTestWebhook = async () => {
+    if (!user) {
+      setWebhookTestError('Please sign in to test webhook deliveries');
+      return;
+    }
     setIsTestingWebhook(true);
     setWebhookTestError(null);
     setWebhookTestResult(null);
@@ -187,8 +198,8 @@ const DashboardApp: React.FC = () => {
       const res = await testWebhook(
         webhookUrl,
         webhookSecret,
-        user?.token,
-        user?.tenantId || 'demo'
+        user.token,
+        user.tenantId
       );
       setWebhookTestResult(res.message || 'Webhook delivered successfully');
       setTimeout(() => setWebhookTestResult(null), 5000);
@@ -226,10 +237,14 @@ const DashboardApp: React.FC = () => {
 
   // Full views
   if (currentTab === 'status-page') {
+    const hashTenant = window.location.hash.startsWith('#/status/')
+      ? window.location.hash.replace('#/status/', '').trim()
+      : '';
+    const statusTenantId = hashTenant || (user ? user.tenantId : '');
     return (
       <div className="min-h-screen bg-[#131316] text-[#e4e1e6] py-8 px-4">
         <StatusPage
-          tenantId={user ? user.tenantId : 'demo'}
+          tenantId={statusTenantId}
           endpoints={endpoints}
           onBack={() => {
             window.location.hash = '';
@@ -794,7 +809,7 @@ const DashboardApp: React.FC = () => {
       {selectedEndpoint && (
         <EndpointDetailModal
           endpoint={selectedEndpoint}
-          tenantId={selectedEndpoint.tenantId || user?.tenantId || 'demo'}
+          tenantId={selectedEndpoint.tenantId || user?.tenantId || ''}
           onClose={() => setSelectedEndpoint(null)}
           onEndpointUpdated={(updated) => {
             setEndpoints((prev) => prev.map((e) => (e.endpointId === updated.endpointId ? updated : e)));

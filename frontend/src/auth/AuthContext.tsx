@@ -1,4 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  signIn as amplifySignIn,
+  signUp as amplifySignUp,
+  confirmSignUp as amplifyConfirmSignUp,
+  resendSignUpCode as amplifyResendSignUpCode,
+  signOut as amplifySignOut,
+  getCurrentUser,
+  fetchAuthSession,
+} from 'aws-amplify/auth';
 
 export interface User {
   email: string;
@@ -7,95 +16,128 @@ export interface User {
   token: string;
 }
 
+export interface SignUpResult {
+  isSignUpComplete: boolean;
+  nextStep: {
+    signUpStep: string;
+    codeDeliveryDetails?: {
+      deliveryMedium?: string;
+      destination?: string;
+    };
+  };
+}
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  signIn: (email: string, password: string, tenantId?: string) => Promise<void>;
-  signUp: (email: string, password: string, tenantId?: string) => Promise<void>;
-  signOut: () => void;
-  switchTenant: (tenantId: string) => void;
+  isLoading: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<SignUpResult>;
+  confirmSignUp: (email: string, confirmationCode: string) => Promise<void>;
+  resendConfirmationCode: (email: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshSession: () => Promise<void>;
 }
-
-const STORAGE_KEY = 'areweupyet_session';
-
-// Helper to create a synthetic signed JWT header.payload for local/Cognito dev
-function createDevJwt(email: string, tenantId: string): string {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = btoa(
-    JSON.stringify({
-      sub: email,
-      'cognito:username': email,
-      email: email,
-      custom_tenant: tenantId,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 86400 * 7,
-    })
-  );
-  return `${header}.${payload}.mockSignature`;
-}
-
-const defaultUser: User = {
-  email: 'admin@acme.corp',
-  name: 'Acme Admin',
-  tenantId: 'demo',
-  token: createDevJwt('admin@acme.corp', 'demo'),
-};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const refreshSession = async () => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
+      const current = await getCurrentUser();
+      const session = await fetchAuthSession();
+      const idToken = session.tokens?.idToken;
+      const token = idToken?.toString() || '';
+      const email = (idToken?.payload?.email as string) || current.signInDetails?.loginId || current.username || '';
+      const tenantId = current.userId; // Cognito sub
+
+      setUser({
+        email,
+        name: email.split('@')[0] || 'Operator',
+        tenantId,
+        token,
+      });
     } catch {
-      // fallback
+      setUser(null);
+    } finally {
+      setIsLoading(false);
     }
-    return defaultUser;
-  });
+  };
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
+    refreshSession();
+  }, []);
+
+  const signIn = async (email: string, password: string) => {
+    const result = await amplifySignIn({
+      username: email.trim().toLowerCase(),
+      password,
+    });
+
+    if (result.isSignedIn) {
+      await refreshSession();
+    } else if (result.nextStep?.signInStep === 'CONFIRM_SIGN_UP') {
+      throw new Error('CONFIRM_SIGN_UP_REQUIRED');
     } else {
-      localStorage.removeItem(STORAGE_KEY);
+      throw new Error(`Sign in incomplete: ${result.nextStep?.signInStep}`);
     }
-  }, [user]);
+  };
 
-  const signIn = async (email: string, _password: string, tenantId?: string) => {
-    const tid = tenantId?.trim() || 'demo';
-    const token = createDevJwt(email, tid);
-    const newUser: User = {
-      email,
-      name: email.split('@')[0],
-      tenantId: tid,
-      token,
+  const signUp = async (email: string, password: string): Promise<SignUpResult> => {
+    const formattedEmail = email.trim().toLowerCase();
+    const result = await amplifySignUp({
+      username: formattedEmail,
+      password,
+      options: {
+        userAttributes: {
+          email: formattedEmail,
+        },
+      },
+    });
+
+    const nextStep = result.nextStep;
+    let deliveryDetails: { deliveryMedium?: string; destination?: string } | undefined;
+    if ('codeDeliveryDetails' in nextStep && nextStep.codeDeliveryDetails) {
+      const details = nextStep.codeDeliveryDetails as { deliveryMedium?: string; destination?: string };
+      deliveryDetails = {
+        deliveryMedium: details.deliveryMedium,
+        destination: details.destination,
+      };
+    }
+
+    return {
+      isSignUpComplete: result.isSignUpComplete,
+      nextStep: {
+        signUpStep: nextStep.signUpStep,
+        codeDeliveryDetails: deliveryDetails,
+      },
     };
-    setUser(newUser);
   };
 
-  const signUp = async (email: string, _password: string, tenantId?: string) => {
-    const tid = tenantId?.trim() || email.split('@')[0];
-    const token = createDevJwt(email, tid);
-    const newUser: User = {
-      email,
-      name: email.split('@')[0],
-      tenantId: tid,
-      token,
-    };
-    setUser(newUser);
+  const confirmSignUp = async (email: string, confirmationCode: string) => {
+    await amplifyConfirmSignUp({
+      username: email.trim().toLowerCase(),
+      confirmationCode: confirmationCode.trim(),
+    });
   };
 
-  const signOut = () => {
-    setUser(null);
+  const resendConfirmationCode = async (email: string) => {
+    await amplifyResendSignUpCode({
+      username: email.trim().toLowerCase(),
+    });
   };
 
-  const switchTenant = (tenantId: string) => {
-    if (!user) return;
-    const token = createDevJwt(user.email, tenantId);
-    setUser({ ...user, tenantId, token });
+  const signOut = async () => {
+    try {
+      await amplifySignOut();
+    } catch (err) {
+      console.warn('SignOut error:', err);
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
@@ -103,10 +145,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         isAuthenticated: !!user,
+        isLoading,
         signIn,
         signUp,
+        confirmSignUp,
+        resendConfirmationCode,
         signOut,
-        switchTenant,
+        refreshSession,
       }}
     >
       {children}

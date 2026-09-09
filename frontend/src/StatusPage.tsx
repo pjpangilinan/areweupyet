@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle, ArrowLeft, Share2, Check } from 'lucide-react';
 import type { Endpoint } from './types';
+import { fetchPublicStatus } from './api/client';
 
 interface StatusPageProps {
   tenantId: string;
@@ -10,10 +11,42 @@ interface StatusPageProps {
 
 export const StatusPage: React.FC<StatusPageProps> = ({ tenantId, endpoints, onBack }) => {
   const [copied, setCopied] = useState(false);
-  const totalCount = endpoints.length;
-  const downEndpoints = endpoints.filter((e) => e.status === 'DOWN');
-  const upEndpoints = endpoints.filter((e) => e.status === 'UP');
-  const isMajorOutage = downEndpoints.length === endpoints.length && endpoints.length > 0;
+  const [liveEndpoints, setLiveEndpoints] = useState<Endpoint[]>(endpoints);
+
+  useEffect(() => {
+    if (endpoints && endpoints.length > 0) {
+      setLiveEndpoints(endpoints);
+      return;
+    }
+    if (tenantId) {
+      fetchPublicStatus(tenantId)
+        .then((res) => {
+          if (res && res.endpoints) {
+            const mapped: Endpoint[] = res.endpoints.map((e) => ({
+              tenantId,
+              endpointId: e.endpointId,
+              name: e.name,
+              url: '',
+              frequencyMin: 5,
+              timeoutSec: 10,
+              expectedStatus: 200,
+              status: e.status,
+              nextCheckAt: '',
+              consecutiveFail: 0,
+              createdAt: '',
+              updatedAt: '',
+            }));
+            setLiveEndpoints(mapped);
+          }
+        })
+        .catch((err) => console.warn('Public status fetch error:', err));
+    }
+  }, [tenantId, endpoints]);
+
+  const totalCount = liveEndpoints.length;
+  const downEndpoints = liveEndpoints.filter((e) => e.status === 'DOWN');
+  const upEndpoints = liveEndpoints.filter((e) => e.status === 'UP');
+  const isMajorOutage = downEndpoints.length === liveEndpoints.length && liveEndpoints.length > 0;
   const isDegraded = downEndpoints.length > 0 && !isMajorOutage;
   const fleetUptime = totalCount > 0 ? ((upEndpoints.length / totalCount) * 100).toFixed(1) + '%' : '—';
 
@@ -95,11 +128,11 @@ export const StatusPage: React.FC<StatusPageProps> = ({ tenantId, endpoints, onB
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="font-display font-medium text-base text-[#e4e1e6]">Services & Core Infrastructure</h2>
-          <span className="text-xs font-mono text-[#908fa0]">{endpoints.length} Monitored</span>
+          <span className="text-xs font-mono text-[#908fa0]">{liveEndpoints.length} Monitored</span>
         </div>
 
         <div className="rounded-xl bg-surface-container-low border border-[#353438] divide-y divide-[#353438] shadow-sm">
-          {endpoints.map((ep) => {
+          {liveEndpoints.map((ep) => {
             const isDown = ep.status === 'DOWN';
             return (
               <div key={ep.endpointId} className="p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">

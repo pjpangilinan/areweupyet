@@ -1,5 +1,15 @@
 import type { Endpoint } from '../types';
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') || 'http://localhost:8080';
+import outputs from '../amplify_outputs.json';
+
+const PRIVATE_API_BASE =
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') ||
+  (outputs.custom?.privateApiUrl as string | undefined)?.replace(/\/+$/, '') ||
+  'http://localhost:8080';
+
+const PUBLIC_API_BASE =
+  (import.meta.env.VITE_PUBLIC_API_URL as string | undefined)?.replace(/\/+$/, '') ||
+  (outputs.custom?.publicApiUrl as string | undefined)?.replace(/\/+$/, '') ||
+  PRIVATE_API_BASE;
 
 export interface PublicStatusResponse {
   tenantId: string;
@@ -68,14 +78,14 @@ export async function fetchEndpoints(token?: string, tenantId?: string): Promise
       headers['X-Tenant-ID'] = tenantId;
     }
 
-    const res = await fetch(`${API_BASE}/endpoints`, { headers });
+    const res = await fetch(`${PRIVATE_API_BASE}/endpoints`, { headers });
     if (!res.ok) {
       throw new Error(`Failed to fetch endpoints: ${res.statusText}`);
     }
     const data = await res.json();
     return Array.isArray(data) ? data : [];
   } catch (err) {
-    console.warn('API fetchEndpoints failed, falling back to local state:', err);
+    console.warn('API fetchEndpoints failed:', err);
     throw err;
   }
 }
@@ -102,7 +112,7 @@ export async function createEndpoint(
     headers['X-Tenant-ID'] = tenantId;
   }
 
-  const res = await fetch(`${API_BASE}/endpoints`, {
+  const res = await fetch(`${PRIVATE_API_BASE}/endpoints`, {
     method: 'POST',
     headers,
     body: JSON.stringify(input),
@@ -125,7 +135,7 @@ export async function deleteEndpoint(endpointId: string, token?: string, tenantI
     headers['X-Tenant-ID'] = tenantId;
   }
 
-  const res = await fetch(`${API_BASE}/endpoints/${endpointId}`, {
+  const res = await fetch(`${PRIVATE_API_BASE}/endpoints/${endpointId}`, {
     method: 'DELETE',
     headers,
   });
@@ -136,7 +146,7 @@ export async function deleteEndpoint(endpointId: string, token?: string, tenantI
 }
 
 export async function fetchPublicStatus(tenantId: string): Promise<PublicStatusResponse> {
-  const res = await fetch(`${API_BASE}/status/${tenantId}`);
+  const res = await fetch(`${PUBLIC_API_BASE}/status/${tenantId}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch public status: ${res.statusText}`);
   }
@@ -147,7 +157,7 @@ export async function fetchEndpointHistory(
   tenantId: string,
   endpointId: string
 ): Promise<EndpointHistoryResponse> {
-  const res = await fetch(`${API_BASE}/status/${tenantId}/endpoints/${endpointId}/history`);
+  const res = await fetch(`${PUBLIC_API_BASE}/status/${tenantId}/endpoints/${endpointId}/history`);
   if (!res.ok) {
     throw new Error(`Failed to fetch endpoint history: ${res.statusText}`);
   }
@@ -176,7 +186,7 @@ export async function triggerManualCheck(
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (tenantId) headers['X-Tenant-ID'] = tenantId;
 
-  const res = await fetch(`${API_BASE}/endpoints/${endpointId}/check`, {
+  const res = await fetch(`${PRIVATE_API_BASE}/endpoints/${endpointId}/check`, {
     method: 'POST',
     headers,
   });
@@ -211,7 +221,7 @@ export async function testWebhook(
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (tenantId) headers['X-Tenant-ID'] = tenantId;
 
-  const res = await fetch(`${API_BASE}/settings/webhook/test`, {
+  const res = await fetch(`${PRIVATE_API_BASE}/settings/webhook/test`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ url, secret }),

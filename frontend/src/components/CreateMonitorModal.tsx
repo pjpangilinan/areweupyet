@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, ShieldAlert, ArrowRight } from 'lucide-react';
 import type { Endpoint } from '../types';
+import { useAuth } from '../auth/AuthContext';
 
 interface CreateMonitorModalProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
   onAdd,
   currentCount,
 }) => {
+  const { user } = useAuth();
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [frequency, setFrequency] = useState(5);
@@ -63,7 +65,7 @@ export const CreateMonitorModal: React.FC<CreateMonitorModalProps> = ({
 
     const now = new Date().toISOString();
     const newEp: Endpoint = {
-      tenantId: 'demo',
+      tenantId: user?.tenantId || '',
       endpointId: `ep-${Date.now()}`,
       name: name.trim(),
       url: url.trim(),

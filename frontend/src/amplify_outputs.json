@@ -1,0 +1,33 @@
+{
+  "auth": {
+    "user_pool_id": "ap-southeast-1_2Ojq7re38",
+    "aws_region": "ap-southeast-1",
+    "user_pool_client_id": "79si6o25pfp9s0ij32j33h92mq",
+    "identity_pool_id": "ap-southeast-1:359c5104-0a57-4099-965c-22a84a28f3eb",
+    "mfa_methods": [],
+    "standard_required_attributes": [
+      "email"
+    ],
+    "username_attributes": [
+      "email"
+    ],
+    "user_verification_types": [
+      "email"
+    ],
+    "groups": [],
+    "mfa_configuration": "NONE",
+    "password_policy": {
+      "min_length": 8,
+      "require_lowercase": true,
+      "require_numbers": true,
+      "require_symbols": true,
+      "require_uppercase": true
+    },
+    "unauthenticated_identities_enabled": true
+  },
+  "version": "1.5",
+  "custom": {
+    "privateApiUrl": "https://lzh5ipnxi34oggro7qkdppg4t40wwxsx.lambda-url.ap-southeast-1.on.aws/",
+    "publicApiUrl": "https://ufiwhmvy3pm3o4flpvkq5utiwe0jstbz.lambda-url.ap-southeast-1.on.aws/"
+  }
+}
