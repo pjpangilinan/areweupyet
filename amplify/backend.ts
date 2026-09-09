@@ -25,7 +25,7 @@ const dataTables = new DynamoDbTables(dataStack, 'AreWeUpYetData');
 
 // Custom CDK Go Lambda functions (Dispatcher, Private API, Public API, Notifier)
 const functionsStack = backend.createStack('FunctionsStack');
-new LambdaFunctions(functionsStack, 'AreWeUpYetFunctions', {
+const lambdaFunctions = new LambdaFunctions(functionsStack, 'AreWeUpYetFunctions', {
   endpointsTable: dataTables.endpointsTable,
   pingResultsTable: dataTables.pingResultsTable,
   incidentsTable: dataTables.incidentsTable,
@@ -36,5 +36,13 @@ new DispatcherMonitoring(backend.createStack('MonitoringStack'), 'AreWeUpYetMoni
 
 // Enforce AWS Free Tier budget safety alert
 new FreeTierBudget(backend.createStack('BudgetStack'), 'AreWeUpYetBudget');
+
+// Export Function URLs to amplify_outputs.json for the frontend
+backend.addOutput({
+  custom: {
+    privateApiUrl: lambdaFunctions.apiPrivateUrl.url,
+    publicApiUrl: lambdaFunctions.apiPublicUrl.url,
+  },
+});
 
 
