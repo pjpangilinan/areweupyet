@@ -3,24 +3,23 @@ backend:
   phases:
     build:
       commands:
-        # Install Go 1.22 in Amplify build environment
+        # Install Go 1.22 in user home directory (avoids root permission denied)
         - |
-          if ! command -v go &> /dev/null; then
+          if [ ! -f $HOME/.go/bin/go ]; then
             echo "Installing Go 1.22.6 for Lambda cross-compilation..."
+            mkdir -p $HOME/.go
             curl -sL https://go.dev/dl/go1.22.6.linux-amd64.tar.gz -o /tmp/go.tar.gz
-            tar -C /usr/local -xzf /tmp/go.tar.gz
+            tar -C $HOME/.go --strip-components=1 -xzf /tmp/go.tar.gz
             rm -f /tmp/go.tar.gz
-            ln -sf /usr/local/go/bin/go /usr/bin/go
-            ln -sf /usr/local/go/bin/gofmt /usr/bin/gofmt
           fi
-        - go version
+        - $HOME/.go/bin/go version
         - npm ci --cache .npm --prefer-offline
         # Compile Go Lambda binaries for Amazon Linux 2023
         - mkdir -p dist/dispatcher dist/api-private dist/api-public dist/notifier
-        - env GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/dispatcher/bootstrap ./cmd/dispatcher
-        - env GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/api-private/bootstrap ./cmd/api-private
-        - env GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/api-public/bootstrap ./cmd/api-public
-        - env GOOS=linux GOARCH=amd64 go build -tags lambda.norpc -o dist/notifier/bootstrap ./cmd/notifier
+        - env GOOS=linux GOARCH=amd64 $HOME/.go/bin/go build -tags lambda.norpc -o dist/dispatcher/bootstrap ./cmd/dispatcher
+        - env GOOS=linux GOARCH=amd64 $HOME/.go/bin/go build -tags lambda.norpc -o dist/api-private/bootstrap ./cmd/api-private
+        - env GOOS=linux GOARCH=amd64 $HOME/.go/bin/go build -tags lambda.norpc -o dist/api-public/bootstrap ./cmd/api-public
+        - env GOOS=linux GOARCH=amd64 $HOME/.go/bin/go build -tags lambda.norpc -o dist/notifier/bootstrap ./cmd/notifier
         - npx ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID
 frontend:
   phases:
@@ -35,4 +34,4 @@ frontend:
     paths:
       - .npm/**/*
       - frontend/node_modules/**/*
-      - /usr/local/go/**/*
+      - $HOME/.go/**/*
