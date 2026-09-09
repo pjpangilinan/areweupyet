@@ -31,41 +31,44 @@ func (n *ConsoleNotifier) Notify(_ context.Context, payload models.WebhookPayloa
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	store := dynamo.NewMemoryStore()
+	store := dynamo.NewPersistentMemoryStore(".local_store.json")
 
-	// Seed sample endpoints
-	now := time.Now().UTC()
-	_ = store.CreateEndpoint(context.Background(), models.Endpoint{
-		TenantID:        "demo",
-		EndpointID:      "ep-google",
-		Name:            "Google Public DNS / Web",
-		URL:             "https://www.google.com",
-		FrequencyMin:    5,
-		TimeoutSec:      5,
-		ExpectedStatus:  200,
-		StatusBucket:    "ACTIVE",
-		NextCheckAt:     now,
-		Status:          "PENDING",
-		ConsecutiveFail: 0,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	})
+	// Seed sample endpoints only if the store is empty
+	existing, _ := store.ListEndpoints(context.Background(), "demo")
+	if len(existing) == 0 {
+		now := time.Now().UTC()
+		_ = store.CreateEndpoint(context.Background(), models.Endpoint{
+			TenantID:        "demo",
+			EndpointID:      "ep-google",
+			Name:            "Google Public DNS / Web",
+			URL:             "https://www.google.com",
+			FrequencyMin:    5,
+			TimeoutSec:      5,
+			ExpectedStatus:  200,
+			StatusBucket:    "ACTIVE",
+			NextCheckAt:     now,
+			Status:          "PENDING",
+			ConsecutiveFail: 0,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
 
-	_ = store.CreateEndpoint(context.Background(), models.Endpoint{
-		TenantID:        "demo",
-		EndpointID:      "ep-httpstat",
-		Name:            "Example Domain",
-		URL:             "https://example.com",
-		FrequencyMin:    5,
-		TimeoutSec:      5,
-		ExpectedStatus:  200,
-		StatusBucket:    "ACTIVE",
-		NextCheckAt:     now,
-		Status:          "PENDING",
-		ConsecutiveFail: 0,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	})
+		_ = store.CreateEndpoint(context.Background(), models.Endpoint{
+			TenantID:        "demo",
+			EndpointID:      "ep-httpstat",
+			Name:            "Example Domain",
+			URL:             "https://example.com",
+			FrequencyMin:    5,
+			TimeoutSec:      5,
+			ExpectedStatus:  200,
+			StatusBucket:    "ACTIVE",
+			NextCheckAt:     now,
+			Status:          "PENDING",
+			ConsecutiveFail: 0,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
+	}
 
 	// Initialize engines
 	dispEngine := dispatcher.New(store, &ConsoleNotifier{}, dispatcher.Config{

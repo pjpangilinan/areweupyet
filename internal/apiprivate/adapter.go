@@ -92,10 +92,14 @@ func extractSubFromJWT(token string) string {
 		}
 	}
 	var claims struct {
-		Sub string `json:"sub"`
+		Sub          string `json:"sub"`
+		CustomTenant string `json:"custom_tenant"`
 	}
 	if err := json.Unmarshal(data, &claims); err != nil {
 		return ""
+	}
+	if claims.CustomTenant != "" {
+		return claims.CustomTenant
 	}
 	return claims.Sub
 }

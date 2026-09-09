@@ -18,6 +18,9 @@ bin/
 .env.*
 !.env.example
 
+# Local dev database
+.local_store.json
+
 # OS & editor artifacts
 .DS_Store
 Thumbs.db

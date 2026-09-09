@@ -2,7 +2,9 @@ package dynamo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -33,6 +35,7 @@ type Store interface {
 // MemoryStore provides a zero-docker, 100% local in-memory store for continuous local testing.
 type MemoryStore struct {
 	mu          sync.RWMutex
+	filePath    string
 	endpoints   map[string]models.Endpoint    // key: tenantID#endpointID
 	pingResults map[string][]models.PingResult // key: endpointID
 	incidents   map[string][]models.Incident  // key: endpointID
@@ -44,6 +47,51 @@ func NewMemoryStore() *MemoryStore {
 		endpoints:   make(map[string]models.Endpoint),
 		pingResults: make(map[string][]models.PingResult),
 		incidents:   make(map[string][]models.Incident),
+	}
+}
+
+// NewPersistentMemoryStore loads existing data from disk if present and writes updates back.
+func NewPersistentMemoryStore(filePath string) *MemoryStore {
+	m := NewMemoryStore()
+	m.filePath = filePath
+	if filePath != "" {
+		if data, err := os.ReadFile(filePath); err == nil {
+			var state struct {
+				Endpoints   map[string]models.Endpoint    `json:"endpoints"`
+				PingResults map[string][]models.PingResult `json:"pingResults"`
+				Incidents   map[string][]models.Incident  `json:"incidents"`
+			}
+			if err := json.Unmarshal(data, &state); err == nil {
+				if state.Endpoints != nil {
+					m.endpoints = state.Endpoints
+				}
+				if state.PingResults != nil {
+					m.pingResults = state.PingResults
+				}
+				if state.Incidents != nil {
+					m.incidents = state.Incidents
+				}
+			}
+		}
+	}
+	return m
+}
+
+func (m *MemoryStore) saveLocked() {
+	if m.filePath == "" {
+		return
+	}
+	state := struct {
+		Endpoints   map[string]models.Endpoint    `json:"endpoints"`
+		PingResults map[string][]models.PingResult `json:"pingResults"`
+		Incidents   map[string][]models.Incident  `json:"incidents"`
+	}{
+		Endpoints:   m.endpoints,
+		PingResults: m.pingResults,
+		Incidents:   m.incidents,
+	}
+	if data, err := json.MarshalIndent(state, "", "  "); err == nil {
+		_ = os.WriteFile(m.filePath, data, 0644)
 	}
 }
 
@@ -64,6 +112,7 @@ func (m *MemoryStore) CreateEndpoint(_ context.Context, ep models.Endpoint) erro
 
 	key := ep.TenantID + "#" + ep.EndpointID
 	m.endpoints[key] = ep
+	m.saveLocked()
 	return nil
 }
 
@@ -71,12 +120,23 @@ func (m *MemoryStore) GetEndpoint(_ context.Context, tenantID, endpointID string
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	key := tenantID + "#" + endpointID
-	ep, ok := m.endpoints[key]
-	if !ok {
-		return nil, ErrEndpointNotFound
+	if tenantID != "" {
+		key := tenantID + "#" + endpointID
+		ep, ok := m.endpoints[key]
+		if !ok {
+			return nil, ErrEndpointNotFound
+		}
+		return &ep, nil
 	}
-	return &ep, nil
+
+	// Fallback if tenantID is omitted: look up by endpointID across tenants
+	for _, ep := range m.endpoints {
+		if ep.EndpointID == endpointID {
+			return &ep, nil
+		}
+	}
+
+	return nil, ErrEndpointNotFound
 }
 
 func (m *MemoryStore) ListEndpoints(_ context.Context, tenantID string) ([]models.Endpoint, error) {
@@ -98,9 +158,16 @@ func (m *MemoryStore) UpdateEndpoint(_ context.Context, ep models.Endpoint) erro
 
 	key := ep.TenantID + "#" + ep.EndpointID
 	if _, ok := m.endpoints[key]; !ok {
-		return ErrEndpointNotFound
+		// If it exists under another tenant key, migrate it
+		for oldKey, existing := range m.endpoints {
+			if existing.EndpointID == ep.EndpointID {
+				delete(m.endpoints, oldKey)
+				break
+			}
+		}
 	}
 	m.endpoints[key] = ep
+	m.saveLocked()
 	return nil
 }
 
@@ -111,8 +178,14 @@ func (m *MemoryStore) DeleteEndpointCascade(_ context.Context, tenantID, endpoin
 
 	key := tenantID + "#" + endpointID
 	delete(m.endpoints, key)
+	for k, ep := range m.endpoints {
+		if ep.EndpointID == endpointID {
+			delete(m.endpoints, k)
+		}
+	}
 	delete(m.pingResults, endpointID)
 	delete(m.incidents, endpointID)
+	m.saveLocked()
 	return nil
 }
 
@@ -143,6 +216,7 @@ func (m *MemoryStore) RecordPingResult(_ context.Context, res models.PingResult)
 	defer m.mu.Unlock()
 
 	m.pingResults[res.EndpointID] = append(m.pingResults[res.EndpointID], res)
+	m.saveLocked()
 	return nil
 }
 
@@ -174,6 +248,7 @@ func (m *MemoryStore) SaveIncident(_ context.Context, inc models.Incident) error
 		list = append(list, inc)
 	}
 	m.incidents[inc.EndpointID] = list
+	m.saveLocked()
 	return nil
 }
 

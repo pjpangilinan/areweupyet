@@ -30,8 +30,17 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
     setFetchError(null);
     try {
       const resolvedTenant = endpoint.tenantId || tenantId || 'demo';
-      const res = await fetchEndpointHistory(resolvedTenant, endpoint.endpointId);
-      setHistory(res);
+      try {
+        const res = await fetchEndpointHistory(resolvedTenant, endpoint.endpointId);
+        setHistory(res);
+      } catch (innerErr) {
+        if (resolvedTenant !== 'demo') {
+          const res = await fetchEndpointHistory('demo', endpoint.endpointId);
+          setHistory(res);
+        } else {
+          throw innerErr;
+        }
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not fetch check history';
       setFetchError(msg);
@@ -60,7 +69,16 @@ export const EndpointDetailModal: React.FC<EndpointDetailModalProps> = ({
     setCheckMsg(null);
     try {
       const resolvedTenant = endpoint.tenantId || tenantId || 'demo';
-      const res = await triggerManualCheck(endpoint.endpointId, undefined, resolvedTenant);
+      let res;
+      try {
+        res = await triggerManualCheck(endpoint.endpointId, undefined, resolvedTenant);
+      } catch (innerErr) {
+        if (resolvedTenant !== 'demo') {
+          res = await triggerManualCheck(endpoint.endpointId, undefined, 'demo');
+        } else {
+          throw innerErr;
+        }
+      }
       setEndpoint(res.endpoint);
       if (onEndpointUpdated) {
         onEndpointUpdated(res.endpoint);
