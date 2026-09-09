@@ -1,9 +1,11 @@
 package apiprivate
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,8 +21,24 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		path = "/"
 	}
 
-	body := strings.NewReader(req.Body)
-	httpReq, err := http.NewRequestWithContext(ctx, method, path, body)
+	fullPath := path
+	if req.RawQueryString != "" {
+		fullPath += "?" + req.RawQueryString
+	}
+
+	var bodyReader io.Reader
+	if req.IsBase64Encoded {
+		decoded, err := base64.StdEncoding.DecodeString(req.Body)
+		if err == nil {
+			bodyReader = bytes.NewReader(decoded)
+		} else {
+			bodyReader = strings.NewReader(req.Body)
+		}
+	} else {
+		bodyReader = strings.NewReader(req.Body)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, method, fullPath, bodyReader)
 	if err != nil {
 		return events.LambdaFunctionURLResponse{
 			StatusCode: http.StatusInternalServerError,

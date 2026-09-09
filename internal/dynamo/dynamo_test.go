@@ -8,6 +8,7 @@ import (
 
 	"areweupyet/internal/models"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,3 +136,54 @@ func TestMemoryStore_ClaimDueEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, dueSecond)
 }
+
+func TestDynamo_AttributeValueSerialization(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	ep := models.Endpoint{
+		TenantID:        "test-tenant",
+		EndpointID:      "test-ep",
+		Name:            "Gateway",
+		URL:             "https://example.com",
+		FrequencyMin:    5,
+		StatusBucket:    "ACTIVE",
+		NextCheckAt:     now,
+		ConsecutiveFail: 0,
+		Status:          "UP",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	av, err := attributevalue.MarshalMap(ep)
+	require.NoError(t, err)
+	assert.NotNil(t, av["tenantId"])
+	assert.NotNil(t, av["endpointId"])
+	assert.NotNil(t, av["statusBucket"])
+	assert.NotNil(t, av["nextCheckAt"])
+
+	// Verify unmarshaling round-trip
+	var unmarshaled models.Endpoint
+	err = attributevalue.UnmarshalMap(av, &unmarshaled)
+	require.NoError(t, err)
+	assert.Equal(t, ep.EndpointID, unmarshaled.EndpointID)
+	assert.True(t, ep.NextCheckAt.Equal(unmarshaled.NextCheckAt))
+
+	// Verify PingResult serialization with numeric TTL
+	ttlVal := now.Add(90 * 24 * time.Hour).Unix()
+	ping := models.PingResult{
+		EndpointID: "test-ep",
+		CheckedAt:  now,
+		StatusCode: 200,
+		LatencyMs:  45,
+		Success:    true,
+		TTL:        ttlVal,
+	}
+	pingAv, err := attributevalue.MarshalMap(ping)
+	require.NoError(t, err)
+	assert.NotNil(t, pingAv["ttl"])
+
+	var unmarshaledPing models.PingResult
+	err = attributevalue.UnmarshalMap(pingAv, &unmarshaledPing)
+	require.NoError(t, err)
+	assert.Equal(t, ttlVal, unmarshaledPing.TTL)
+}
+
