@@ -7,6 +7,7 @@ export interface Endpoint {
   timeoutSec: number;
   expectedStatus: number;
   status: 'UP' | 'DOWN' | 'PENDING';
+  group?: string;
   nextCheckAt: string;
   consecutiveFail: number;
   createdAt: string;

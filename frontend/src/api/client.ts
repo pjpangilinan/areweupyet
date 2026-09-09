@@ -57,13 +57,16 @@ export interface EndpointHistoryResponse {
   recentPings: PingResult[];
 }
 
-export async function fetchEndpoints(token?: string): Promise<Endpoint[]> {
+export async function fetchEndpoints(token?: string, tenantId?: string): Promise<Endpoint[]> {
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (tenantId) {
+      headers['X-Tenant-ID'] = tenantId;
     }
 
     const res = await fetch(`${API_BASE}/endpoints`, { headers });
@@ -82,17 +85,22 @@ export async function createEndpoint(
   input: {
     name: string;
     url: string;
+    group?: string;
     frequencyMin: number;
     timeoutSec?: number;
     expectedStatus?: number;
   },
-  token?: string
+  token?: string,
+  tenantId?: string
 ): Promise<Endpoint> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
   }
 
   const res = await fetch(`${API_BASE}/endpoints`, {
@@ -109,10 +117,13 @@ export async function createEndpoint(
   return res.json();
 }
 
-export async function deleteEndpoint(endpointId: string, token?: string): Promise<void> {
+export async function deleteEndpoint(endpointId: string, token?: string, tenantId?: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
   }
 
   const res = await fetch(`${API_BASE}/endpoints/${endpointId}`, {

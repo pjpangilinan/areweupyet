@@ -15,6 +15,7 @@ type Endpoint struct {
 	NextCheckAt     time.Time `json:"nextCheckAt" dynamodbav:"nextCheckAt"`
 	ConsecutiveFail int       `json:"consecutiveFail" dynamodbav:"consecutiveFail"`
 	Status          string    `json:"status" dynamodbav:"status"` // "UP" | "DOWN" | "PENDING"
+	Group           string    `json:"group,omitempty" dynamodbav:"group,omitempty"`
 	CreatedAt       time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }

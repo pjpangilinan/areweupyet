@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Plus,
   Trash2,
@@ -15,6 +15,7 @@ import {
   X,
   ShieldAlert,
   ArrowRight,
+  Folder,
 } from 'lucide-react';
 import type { Endpoint } from './types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
@@ -30,6 +31,7 @@ const initialEndpoints: Endpoint[] = [
     endpointId: 'ep-google',
     name: 'Google Public DNS / Web',
     url: 'https://www.google.com',
+    group: 'External Dependencies',
     frequencyMin: 5,
     timeoutSec: 5,
     expectedStatus: 200,
@@ -44,6 +46,7 @@ const initialEndpoints: Endpoint[] = [
     endpointId: 'ep-httpstat',
     name: 'Example Domain Health',
     url: 'https://example.com',
+    group: 'Websites',
     frequencyMin: 5,
     timeoutSec: 5,
     expectedStatus: 200,
@@ -53,34 +56,6 @@ const initialEndpoints: Endpoint[] = [
     createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
     updatedAt: new Date().toISOString(),
   },
-  {
-    tenantId: 'demo',
-    endpointId: 'ep-auth',
-    name: 'Authentication Gateway',
-    url: 'https://auth.example.com/health',
-    frequencyMin: 5,
-    timeoutSec: 10,
-    expectedStatus: 200,
-    status: 'UP',
-    nextCheckAt: new Date().toISOString(),
-    consecutiveFail: 0,
-    createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    tenantId: 'demo',
-    endpointId: 'ep-billing',
-    name: 'Billing Webhook Worker',
-    url: 'https://billing.example.com/events',
-    frequencyMin: 10,
-    timeoutSec: 15,
-    expectedStatus: 200,
-    status: 'UP',
-    nextCheckAt: new Date().toISOString(),
-    consecutiveFail: 0,
-    createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
 ];
 
 const DashboardApp: React.FC = () => {
@@ -88,6 +63,7 @@ const DashboardApp: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<'monitors' | 'settings' | 'status-page' | 'terms' | 'privacy'>('monitors');
   const [endpoints, setEndpoints] = useState<Endpoint[]>(initialEndpoints);
   const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -96,8 +72,10 @@ const DashboardApp: React.FC = () => {
   // New Monitor Form State
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  const [newGroup, setNewGroup] = useState('');
   const [newFrequency, setNewFrequency] = useState(5);
   const [addError, setAddError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Settings State
   const [webhookUrl, setWebhookUrl] = useState('https://api.mycompany.com/webhooks/uptime');
@@ -121,38 +99,53 @@ const DashboardApp: React.FC = () => {
   const loadEndpoints = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const data = await fetchEndpoints(user?.token);
+      const data = await fetchEndpoints(user?.token, user?.tenantId || 'demo');
       if (data && data.length > 0) {
         setEndpoints(data);
       }
-    } catch {
-      // Keep existing state
+    } catch (err) {
+      console.warn('Backend fetch error:', err);
     } finally {
       setIsRefreshing(false);
     }
-  }, [user?.token]);
+  }, [user?.token, user?.tenantId]);
 
   useEffect(() => {
     loadEndpoints();
   }, [loadEndpoints]);
 
+  // Unique collections/groups
+  const availableGroups = useMemo(() => {
+    const groups = new Set<string>();
+    endpoints.forEach((e) => {
+      if (e.group && e.group.trim()) {
+        groups.add(e.group.trim());
+      }
+    });
+    return Array.from(groups);
+  }, [endpoints]);
+
   // Handle Add Monitor
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError(null);
+    setIsSubmitting(true);
 
     if (endpoints.length >= 20) {
-      setAddError('Workspace limit reached: Maximum 20 active monitors.');
+      setAddError('Workspace limit reached: Maximum 20 active monitors in standard plan.');
+      setIsSubmitting(false);
       return;
     }
 
     if (!newName.trim()) {
       setAddError('Monitor name is required.');
+      setIsSubmitting(false);
       return;
     }
 
     if (!newUrl.startsWith('http://') && !newUrl.startsWith('https://')) {
       setAddError('URL must begin with http:// or https://');
+      setIsSubmitting(false);
       return;
     }
 
@@ -165,54 +158,45 @@ const DashboardApp: React.FC = () => {
       lower.includes('192.168.')
     ) {
       setAddError('SSRF Guard: Private, loopback, and cloud metadata addresses are blocked.');
+      setIsSubmitting(false);
       return;
     }
-
-    const now = new Date().toISOString();
-    const tempEp: Endpoint = {
-      tenantId: user?.tenantId || 'demo',
-      endpointId: `ep-${Date.now()}`,
-      name: newName.trim(),
-      url: newUrl.trim(),
-      frequencyMin: newFrequency,
-      timeoutSec: 10,
-      expectedStatus: 200,
-      status: 'UP',
-      nextCheckAt: now,
-      consecutiveFail: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
 
     try {
       const created = await createEndpoint(
         {
-          name: tempEp.name,
-          url: tempEp.url,
-          frequencyMin: tempEp.frequencyMin,
-          timeoutSec: tempEp.timeoutSec,
-          expectedStatus: tempEp.expectedStatus,
+          name: newName.trim(),
+          url: newUrl.trim(),
+          group: newGroup.trim() || undefined,
+          frequencyMin: newFrequency,
+          timeoutSec: 10,
+          expectedStatus: 200,
         },
-        user?.token
+        user?.token,
+        user?.tenantId || 'demo'
       );
-      setEndpoints((prev) => [...prev, created]);
-    } catch {
-      setEndpoints((prev) => [...prev, tempEp]);
-    }
 
-    setNewName('');
-    setNewUrl('');
-    setNewFrequency(5);
-    setIsAddOpen(false);
+      setEndpoints((prev) => [created, ...prev.filter((p) => p.endpointId !== created.endpointId)]);
+      setNewName('');
+      setNewUrl('');
+      setNewGroup('');
+      setNewFrequency(5);
+      setIsAddOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to register endpoint with backend';
+      setAddError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Handle Delete
   const handleDelete = async (endpointId: string) => {
     if (!confirm('Are you sure you want to delete this monitor?')) return;
     try {
-      await deleteEndpoint(endpointId, user?.token);
-    } catch {
-      // ignore
+      await deleteEndpoint(endpointId, user?.token, user?.tenantId || 'demo');
+    } catch (err) {
+      console.warn('Delete error:', err);
     }
     setEndpoints((prev) => prev.filter((e) => e.endpointId !== endpointId));
     if (selectedEndpoint?.endpointId === endpointId) {
@@ -234,11 +218,22 @@ const DashboardApp: React.FC = () => {
   const downCount = endpoints.filter((e) => e.status === 'DOWN').length;
   const isHealthy = downCount === 0;
 
-  const filteredEndpoints = endpoints.filter((ep) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return ep.name.toLowerCase().includes(q) || ep.url.toLowerCase().includes(q);
-  });
+  const filteredEndpoints = endpoints
+    .filter((ep) => {
+      if (selectedGroup !== 'ALL') {
+        return (ep.group || '').trim().toLowerCase() === selectedGroup.trim().toLowerCase();
+      }
+      return true;
+    })
+    .filter((ep) => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        ep.name.toLowerCase().includes(q) ||
+        ep.url.toLowerCase().includes(q) ||
+        (ep.group && ep.group.toLowerCase().includes(q))
+      );
+    });
 
   // Full views
   if (currentTab === 'status-page') {
@@ -448,6 +443,42 @@ const DashboardApp: React.FC = () => {
               </div>
             </div>
 
+            {/* Collections / Groups Bar */}
+            {availableGroups.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-mono">
+                <span className="text-[#908fa0] flex items-center gap-1 text-[11px] uppercase tracking-wider font-semibold mr-1">
+                  <Folder className="w-3.5 h-3.5 text-primary" />
+                  <span>Collections:</span>
+                </span>
+                <button
+                  onClick={() => setSelectedGroup('ALL')}
+                  className={`px-3 py-1 rounded-full transition-colors ${
+                    selectedGroup === 'ALL'
+                      ? 'bg-primary text-[#1000a9] font-medium'
+                      : 'bg-[#1b1b1e] border border-[#2a2a2d] text-[#c7c4d7] hover:text-[#e4e1e6]'
+                  }`}
+                >
+                  All ({endpoints.length})
+                </button>
+                {availableGroups.map((grp) => {
+                  const count = endpoints.filter((e) => (e.group || '').trim() === grp).length;
+                  return (
+                    <button
+                      key={grp}
+                      onClick={() => setSelectedGroup(grp)}
+                      className={`px-3 py-1 rounded-full transition-colors ${
+                        selectedGroup === grp
+                          ? 'bg-primary text-[#1000a9] font-medium'
+                          : 'bg-[#1b1b1e] border border-[#2a2a2d] text-[#c7c4d7] hover:text-[#e4e1e6]'
+                      }`}
+                    >
+                      {grp} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Monitors Header & Search */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
               <div className="flex items-center gap-2">
@@ -456,7 +487,7 @@ const DashboardApp: React.FC = () => {
                   {filteredEndpoints.length}
                 </span>
                 <span className="text-xs font-mono text-[#908fa0] hidden sm:inline">
-                  (Click any monitor to view response graph & recent pings)
+                  (Click any monitor to view response graph & live pings)
                 </span>
                 <button
                   onClick={loadEndpoints}
@@ -496,10 +527,10 @@ const DashboardApp: React.FC = () => {
                       key={ep.endpointId}
                       onClick={() => setSelectedEndpoint(ep)}
                       className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] hover:border-primary/50 hover:bg-[#202024] cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 group"
-                      title="Click to view recent pings & latency graph"
+                      title="Click to inspect recent pings & latency graph"
                     >
-                      {/* Left: Indicator + Name & URL */}
-                      <div className="flex items-start sm:items-center gap-3 min-w-[240px]">
+                      {/* Left: Indicator + Name & URL & Collection Tag */}
+                      <div className="flex items-start sm:items-center gap-3 min-w-[260px]">
                         <span
                           className={`mt-1 sm:mt-0 w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                             isDown
@@ -521,6 +552,11 @@ const DashboardApp: React.FC = () => {
                             >
                               {ep.status}
                             </span>
+                            {ep.group && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-[#2a2a2d] text-[#c7c4d7]">
+                                {ep.group}
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs font-mono text-[#908fa0] flex items-center gap-1.5">
                             <span className="truncate max-w-[280px]">{ep.url}</span>
@@ -587,9 +623,9 @@ const DashboardApp: React.FC = () => {
           </>
         )}
 
-        {/* Alerts & Settings Tab */}
+        {/* Alerts & Settings Tab (Centered properly) */}
         {currentTab === 'settings' && (
-          <div className="max-w-3xl space-y-6">
+          <div className="max-w-3xl mx-auto space-y-6">
             <div>
               <h2 className="font-semibold text-lg text-[#e4e1e6]">Alerts & Webhooks</h2>
               <p className="text-xs font-mono text-[#908fa0]">
@@ -727,6 +763,17 @@ const DashboardApp: React.FC = () => {
               </div>
 
               <div className="space-y-1">
+                <label className="text-[#c7c4d7]">COLLECTION / GROUP (OPTIONAL)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Websites, APIs, Payments"
+                  value={newGroup}
+                  onChange={(e) => setNewGroup(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#131316] border border-[#2a2a2d] rounded-lg text-[#e4e1e6] focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="space-y-1">
                 <label className="text-[#c7c4d7]">CHECK FREQUENCY</label>
                 <select
                   value={newFrequency}
@@ -751,9 +798,10 @@ const DashboardApp: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-primary text-[#1000a9] font-medium hover:bg-white transition-colors"
+                  disabled={isSubmitting}
+                  className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-primary text-[#1000a9] font-medium hover:bg-white transition-colors disabled:opacity-50"
                 >
-                  <span>Save Monitor</span>
+                  <span>{isSubmitting ? 'Saving...' : 'Save Monitor'}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
