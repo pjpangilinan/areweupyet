@@ -14,6 +14,49 @@ export interface PublicStatusResponse {
   }>;
 }
 
+export interface PingResult {
+  endpointId: string;
+  checkedAt: string;
+  statusCode: number;
+  latencyMs: number;
+  success: boolean;
+  errorMessage?: string;
+}
+
+export interface EndpointHistoryResponse {
+  endpointId: string;
+  uptime24h: {
+    totalWindowSeconds: number;
+    downtimeSeconds: number;
+    uptimePercentage: number;
+    formattedUptime: string;
+    incidentCount: number;
+  };
+  uptime7d: {
+    totalWindowSeconds: number;
+    downtimeSeconds: number;
+    uptimePercentage: number;
+    formattedUptime: string;
+    incidentCount: number;
+  };
+  uptime30d: {
+    totalWindowSeconds: number;
+    downtimeSeconds: number;
+    uptimePercentage: number;
+    formattedUptime: string;
+    incidentCount: number;
+  };
+  timeline: Array<{
+    incidentId: string;
+    startedAt: string;
+    resolvedAt?: string;
+    duration: string;
+    status: string;
+    reason: string;
+  }>;
+  recentPings: PingResult[];
+}
+
 export async function fetchEndpoints(token?: string): Promise<Endpoint[]> {
   try {
     const headers: Record<string, string> = {
@@ -86,6 +129,17 @@ export async function fetchPublicStatus(tenantId: string): Promise<PublicStatusR
   const res = await fetch(`${API_BASE}/status/${tenantId}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch public status: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchEndpointHistory(
+  tenantId: string,
+  endpointId: string
+): Promise<EndpointHistoryResponse> {
+  const res = await fetch(`${API_BASE}/status/${tenantId}/endpoints/${endpointId}/history`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch endpoint history: ${res.statusText}`);
   }
   return res.json();
 }

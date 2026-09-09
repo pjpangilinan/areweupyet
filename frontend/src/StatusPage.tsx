@@ -1,17 +1,25 @@
-import React from 'react';
-import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle, ArrowLeft } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle, ArrowLeft, Share2, Check } from 'lucide-react';
 import type { Endpoint } from './types';
 
 interface StatusPageProps {
   tenantId: string;
   endpoints: Endpoint[];
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 export const StatusPage: React.FC<StatusPageProps> = ({ tenantId, endpoints, onBack }) => {
+  const [copied, setCopied] = useState(false);
   const downEndpoints = endpoints.filter((e) => e.status === 'DOWN');
   const isMajorOutage = downEndpoints.length === endpoints.length && endpoints.length > 0;
   const isDegraded = downEndpoints.length > 0 && !isMajorOutage;
+
+  const handleShare = () => {
+    const url = `${window.location.origin}/#/status/${tenantId}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
 
   return (
     <div className="max-w-4xl w-full mx-auto p-6 space-y-8 text-[#e4e1e6]">
@@ -23,12 +31,24 @@ export const StatusPage: React.FC<StatusPageProps> = ({ tenantId, endpoints, onB
             {tenantId} · System Status
           </span>
         </div>
-        <button
-          onClick={onBack}
-          className="flex items-center text-xs font-mono text-secondary hover:underline"
-        >
-          <ArrowLeft className="w-4 h-4 mr-1" /> Back to Dashboard
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleShare}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#2a2a2d] hover:bg-[#353438] text-xs font-mono text-[#e4e1e6] transition-colors"
+            title="Copy Public Shareable Link"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-tertiary" /> : <Share2 className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Link Copied!' : 'Share Page'}</span>
+          </button>
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="flex items-center text-xs font-mono text-secondary hover:underline"
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Dashboard
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Hero Operational Banner */}

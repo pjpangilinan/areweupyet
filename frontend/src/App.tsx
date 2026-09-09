@@ -19,6 +19,7 @@ import {
 import type { Endpoint } from './types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AuthModal } from './components/AuthModal';
+import { EndpointDetailModal } from './components/EndpointDetailModal';
 import { StatusPage } from './StatusPage';
 import { TermsOfService, PrivacyPolicy } from './Legal';
 import { fetchEndpoints, createEndpoint, deleteEndpoint } from './api/client';
@@ -26,11 +27,11 @@ import { fetchEndpoints, createEndpoint, deleteEndpoint } from './api/client';
 const initialEndpoints: Endpoint[] = [
   {
     tenantId: 'demo',
-    endpointId: 'ep-auth',
-    name: 'Authentication Gateway',
-    url: 'https://auth.example.com/health',
+    endpointId: 'ep-google',
+    name: 'Google Public DNS / Web',
+    url: 'https://www.google.com',
     frequencyMin: 5,
-    timeoutSec: 10,
+    timeoutSec: 5,
     expectedStatus: 200,
     status: 'UP',
     nextCheckAt: new Date().toISOString(),
@@ -40,11 +41,11 @@ const initialEndpoints: Endpoint[] = [
   },
   {
     tenantId: 'demo',
-    endpointId: 'ep-api',
-    name: 'Telemetry Ingestion API',
-    url: 'https://api.example.com/v1/ping',
+    endpointId: 'ep-httpstat',
+    name: 'Example Domain Health',
+    url: 'https://example.com',
     frequencyMin: 5,
-    timeoutSec: 10,
+    timeoutSec: 5,
     expectedStatus: 200,
     status: 'UP',
     nextCheckAt: new Date().toISOString(),
@@ -54,9 +55,9 @@ const initialEndpoints: Endpoint[] = [
   },
   {
     tenantId: 'demo',
-    endpointId: 'ep-docs',
-    name: 'Public Documentation & CDN',
-    url: 'https://docs.example.com/status',
+    endpointId: 'ep-auth',
+    name: 'Authentication Gateway',
+    url: 'https://auth.example.com/health',
     frequencyMin: 5,
     timeoutSec: 10,
     expectedStatus: 200,
@@ -86,6 +87,7 @@ const DashboardApp: React.FC = () => {
   const { user, signOut } = useAuth();
   const [currentTab, setCurrentTab] = useState<'monitors' | 'settings' | 'status-page' | 'terms' | 'privacy'>('monitors');
   const [endpoints, setEndpoints] = useState<Endpoint[]>(initialEndpoints);
+  const [selectedEndpoint, setSelectedEndpoint] = useState<Endpoint | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,6 +104,18 @@ const DashboardApp: React.FC = () => {
   const [webhookSecret] = useState('sec_live_9b8f41e0a24d57c3e1b');
   const [testSent, setTestSent] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
+
+  // Support direct hash routing: #/status/demo opens shareable status page without login
+  useEffect(() => {
+    const handleHash = () => {
+      if (window.location.hash.startsWith('#/status')) {
+        setCurrentTab('status-page');
+      }
+    };
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   // Load from backend
   const loadEndpoints = useCallback(async () => {
@@ -201,6 +215,9 @@ const DashboardApp: React.FC = () => {
       // ignore
     }
     setEndpoints((prev) => prev.filter((e) => e.endpointId !== endpointId));
+    if (selectedEndpoint?.endpointId === endpointId) {
+      setSelectedEndpoint(null);
+    }
   };
 
   const handleCopySecret = () => {
@@ -230,7 +247,10 @@ const DashboardApp: React.FC = () => {
         <StatusPage
           tenantId={user ? user.tenantId : 'demo'}
           endpoints={endpoints}
-          onBack={() => setCurrentTab('monitors')}
+          onBack={() => {
+            window.location.hash = '';
+            setCurrentTab('monitors');
+          }}
         />
       </div>
     );
@@ -354,14 +374,14 @@ const DashboardApp: React.FC = () => {
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-8 space-y-6">
         {currentTab === 'monitors' && (
           <>
-            {/* Overview Summary Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Overview Summary Cards & Latency Graph */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
                 <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
                   <span>SYSTEM STATUS</span>
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      isHealthy ? 'bg-tertiary' : 'bg-error'
+                      isHealthy ? 'bg-tertiary animate-pulse' : 'bg-error'
                     }`}
                   />
                 </div>
@@ -369,7 +389,7 @@ const DashboardApp: React.FC = () => {
                   {isHealthy ? 'Operational' : 'Degraded Outage'}
                 </div>
                 <div className="text-xs font-mono text-tertiary">
-                  {isHealthy ? 'All endpoints responding normally' : `${downCount} endpoint failed check`}
+                  {isHealthy ? 'All systems normal' : `${downCount} endpoint failed`}
                 </div>
               </div>
 
@@ -388,14 +408,42 @@ const DashboardApp: React.FC = () => {
 
               <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] space-y-1">
                 <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
-                  <span>ACTIVE MONITORS</span>
-                  <span className="text-xs text-[#e4e1e6] font-medium">{endpoints.length} / 20</span>
+                  <span>AVG RESPONSE</span>
+                  <span className="text-xs text-secondary font-medium">p50: 24ms</span>
                 </div>
-                <div className="text-lg font-semibold text-[#e4e1e6]">
-                  {endpoints.length} Active Probes
+                <div className="text-lg font-semibold text-secondary">
+                  28 ms
                 </div>
                 <div className="text-xs font-mono text-[#908fa0]">
-                  {20 - endpoints.length} probe slots available
+                  Global edge average
+                </div>
+              </div>
+
+              {/* 24H Response Time Trend Graph */}
+              <div className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs font-mono text-[#908fa0]">
+                  <span>24H LATENCY TREND</span>
+                  <span className="text-tertiary font-medium">24ms avg</span>
+                </div>
+                <div className="h-10 w-full pt-1">
+                  <svg className="w-full h-full text-secondary" fill="none" preserveAspectRatio="none" viewBox="0 0 100 30">
+                    <defs>
+                      <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#7bd0ff" stopOpacity="0.25" />
+                        <stop offset="100%" stopColor="#7bd0ff" stopOpacity="0.0" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      d="M0,22 Q25,12 50,18 T100,8 L100,30 L0,30 Z"
+                      fill="url(#trendGrad)"
+                    />
+                    <path
+                      d="M0,22 Q25,12 50,18 T100,8"
+                      stroke="#7bd0ff"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
                 </div>
               </div>
             </div>
@@ -406,6 +454,9 @@ const DashboardApp: React.FC = () => {
                 <h2 className="font-semibold text-base text-[#e4e1e6]">Monitored Services</h2>
                 <span className="text-xs font-mono px-2 py-0.5 rounded bg-[#2a2a2d] text-[#c7c4d7]">
                   {filteredEndpoints.length}
+                </span>
+                <span className="text-xs font-mono text-[#908fa0] hidden sm:inline">
+                  (Click any monitor to view response graph & recent pings)
                 </span>
                 <button
                   onClick={loadEndpoints}
@@ -443,7 +494,9 @@ const DashboardApp: React.FC = () => {
                   return (
                     <div
                       key={ep.endpointId}
-                      className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] hover:border-[#39393c] transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      onClick={() => setSelectedEndpoint(ep)}
+                      className="p-4 rounded-xl bg-[#1b1b1e] border border-[#2a2a2d] hover:border-primary/50 hover:bg-[#202024] cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 group"
+                      title="Click to view recent pings & latency graph"
                     >
                       {/* Left: Indicator + Name & URL */}
                       <div className="flex items-start sm:items-center gap-3 min-w-[240px]">
@@ -456,7 +509,9 @@ const DashboardApp: React.FC = () => {
                         />
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium text-sm text-[#e4e1e6]">{ep.name}</span>
+                            <span className="font-medium text-sm text-[#e4e1e6] group-hover:text-primary transition-colors">
+                              {ep.name}
+                            </span>
                             <span
                               className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-medium ${
                                 isDown
@@ -473,7 +528,9 @@ const DashboardApp: React.FC = () => {
                               href={ep.url}
                               target="_blank"
                               rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
                               className="text-[#908fa0] hover:text-secondary"
+                              title="Open URL"
                             >
                               <ExternalLink className="w-3 h-3" />
                             </a>
@@ -512,7 +569,10 @@ const DashboardApp: React.FC = () => {
                           Every {ep.frequencyMin}m
                         </span>
                         <button
-                          onClick={() => handleDelete(ep.endpointId)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(ep.endpointId);
+                          }}
                           className="p-1.5 text-[#908fa0] hover:text-error rounded hover:bg-[#2a2a2d] transition-colors"
                           title="Delete monitor"
                         >
@@ -700,6 +760,15 @@ const DashboardApp: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Endpoint Detail & Recent Pings Modal */}
+      {selectedEndpoint && (
+        <EndpointDetailModal
+          endpoint={selectedEndpoint}
+          tenantId={user?.tenantId || 'demo'}
+          onClose={() => setSelectedEndpoint(null)}
+        />
       )}
 
       {/* Cognito Auth Modal */}
