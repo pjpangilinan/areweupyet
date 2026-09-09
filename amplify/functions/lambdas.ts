@@ -65,7 +65,6 @@ export class LambdaFunctions extends Construct {
           lambda.HttpMethod.POST,
           lambda.HttpMethod.PUT,
           lambda.HttpMethod.DELETE,
-          lambda.HttpMethod.OPTIONS,
         ],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID'],
       },
@@ -89,7 +88,7 @@ export class LambdaFunctions extends Construct {
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
         allowedOrigins: ['*'],
-        allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.OPTIONS],
+        allowedMethods: [lambda.HttpMethod.GET],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID'],
       },
     });
