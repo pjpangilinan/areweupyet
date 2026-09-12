@@ -18,14 +18,14 @@ func TestMemoryStore_CRUDAndCascade(t *testing.T) {
 	store := NewMemoryStore()
 
 	ep := models.Endpoint{
-		TenantID:        "tenant-1",
-		EndpointID:      "ep-1",
-		Name:            "Production API",
-		URL:             "https://example.com/health",
-		FrequencyMin:    5,
-		StatusBucket:    "ACTIVE",
-		NextCheckAt:     time.Now().Add(-1 * time.Minute),
-		Status:          "PENDING",
+		TenantID:     "tenant-1",
+		EndpointID:   "ep-1",
+		Name:         "Production API",
+		URL:          "https://example.com/health",
+		FrequencyMin: 5,
+		StatusBucket: "ACTIVE",
+		NextCheckAt:  time.Now().Add(-1 * time.Minute),
+		Status:       "PENDING",
 	}
 
 	// Create
@@ -186,4 +186,3 @@ func TestDynamo_AttributeValueSerialization(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ttlVal, unmarshaledPing.TTL)
 }
-

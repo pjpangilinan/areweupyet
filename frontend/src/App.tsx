@@ -575,16 +575,18 @@ const DashboardApp: React.FC = () => {
                           </div>
                           <div className="text-xs font-mono text-[#908fa0] flex items-center gap-1.5">
                             <span className="truncate max-w-[200px] sm:max-w-xs md:max-w-md">{ep.url}</span>
-                            <a
-                              href={ep.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-[#908fa0] hover:text-secondary flex-shrink-0"
-                              title="Open URL"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
+                            {(ep.url.startsWith("http://") || ep.url.startsWith("https://")) && (
+                              <a
+                                href={ep.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-[#908fa0] hover:text-secondary flex-shrink-0"
+                                title="Open URL"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
                           </div>
                         </div>
                       </div>

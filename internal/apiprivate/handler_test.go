@@ -3,9 +3,16 @@ package apiprivate
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,3 +281,150 @@ func TestPrivateAPI_WebhookTestSSRFGuard(t *testing.T) {
 	assert.Contains(t, w2.Body.String(), "SSRF Guard")
 }
 
+func createTestRS256Token(t *testing.T, privKey *rsa.PrivateKey, kid string, claims TokenClaims) string {
+	header := map[string]string{
+		"alg": "RS256",
+		"kid": kid,
+	}
+	headerJSON, err := json.Marshal(header)
+	require.NoError(t, err)
+	claimsJSON, err := json.Marshal(claims)
+	require.NoError(t, err)
+
+	encodedHeader := base64.RawURLEncoding.EncodeToString(headerJSON)
+	encodedClaims := base64.RawURLEncoding.EncodeToString(claimsJSON)
+	signedContent := encodedHeader + "." + encodedClaims
+
+	hashed := sha256.Sum256([]byte(signedContent))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, hashed[:])
+	require.NoError(t, err)
+
+	encodedSig := base64.RawURLEncoding.EncodeToString(signature)
+	return signedContent + "." + encodedSig
+}
+
+func TestPrivateAPI_SecurityHeaders(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	req.Header.Set("X-Tenant-ID", "tenant-headers")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+	assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+	assert.Equal(t, "strict-origin-when-cross-origin", w.Header().Get("Referrer-Policy"))
+}
+
+func TestPrivateAPI_RequestBodyLimit(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+
+	// Create a payload larger than 64KB (e.g. 70KB)
+	largeName := strings.Repeat("A", 70*1024)
+	largeBody := fmt.Sprintf(`{"name":"%s","url":"https://example.com","frequencyMin":5}`, largeName)
+
+	req := httptest.NewRequest(http.MethodPost, "/endpoints", strings.NewReader(largeBody))
+	req.Header.Set("X-Tenant-ID", "tenant-limit")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid request body")
+}
+
+func TestPrivateAPI_InvalidIDValidation(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+
+	// Special characters in endpoint ID -> 400 Bad Request
+	req := httptest.NewRequest(http.MethodGet, "/endpoints/bad!id@#$", nil)
+	req.Header.Set("X-Tenant-ID", "tenant-id-test")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid endpoint id")
+
+	// Endpoint ID longer than 64 chars -> 400 Bad Request
+	longID := strings.Repeat("a", 65)
+	reqLong := httptest.NewRequest(http.MethodGet, "/endpoints/"+longID, nil)
+	reqLong.Header.Set("X-Tenant-ID", "tenant-id-test")
+	wLong := httptest.NewRecorder()
+	server.ServeHTTP(wLong, reqLong)
+	assert.Equal(t, http.StatusBadRequest, wLong.Code)
+	assert.Contains(t, wLong.Body.String(), "invalid endpoint id")
+}
+
+func TestPrivateAPI_CryptographicJWTVerification(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	attackerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	region := "us-east-1"
+	userPoolID := "us-east-1_TestPool123"
+	kid := "test-key-id-1"
+
+	verifier := NewJWKSVerifierWithKeys(region, userPoolID, map[string]*rsa.PublicKey{
+		kid: &privKey.PublicKey,
+	})
+	server.SetVerifier(verifier)
+
+	// Simulate AWS Lambda production environment
+	t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "AreWeUpYet-ApiPrivate")
+
+	// 1. Missing token -> 401 Unauthorized
+	reqNoAuth := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	wNoAuth := httptest.NewRecorder()
+	server.ServeHTTP(wNoAuth, reqNoAuth)
+	assert.Equal(t, http.StatusUnauthorized, wNoAuth.Code)
+
+	// 2. Valid token signed by privKey -> 200 OK
+	validClaims := TokenClaims{
+		Sub:      "user-sub-12345",
+		Iss:      fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, userPoolID),
+		Exp:      time.Now().Add(1 * time.Hour).Unix(),
+		TokenUse: "id",
+	}
+	validToken := createTestRS256Token(t, privKey, kid, validClaims)
+
+	reqValid := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqValid.Header.Set("Authorization", "Bearer "+validToken)
+	wValid := httptest.NewRecorder()
+	server.ServeHTTP(wValid, reqValid)
+	assert.Equal(t, http.StatusOK, wValid.Code)
+
+	// 3. Forged token (signed by attackerKey) -> 401 Unauthorized
+	forgedToken := createTestRS256Token(t, attackerKey, kid, validClaims)
+	reqForged := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqForged.Header.Set("Authorization", "Bearer "+forgedToken)
+	wForged := httptest.NewRecorder()
+	server.ServeHTTP(wForged, reqForged)
+	assert.Equal(t, http.StatusUnauthorized, wForged.Code)
+
+	// 4. Expired token -> 401 Unauthorized
+	expiredClaims := validClaims
+	expiredClaims.Exp = time.Now().Add(-1 * time.Hour).Unix()
+	expiredToken := createTestRS256Token(t, privKey, kid, expiredClaims)
+	reqExpired := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqExpired.Header.Set("Authorization", "Bearer "+expiredToken)
+	wExpired := httptest.NewRecorder()
+	server.ServeHTTP(wExpired, reqExpired)
+	assert.Equal(t, http.StatusUnauthorized, wExpired.Code)
+
+	// 5. Tampered payload -> 401 Unauthorized
+	tamperedPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"admin-hacker","iss":"fake","exp":9999999999,"token_use":"id"}`))
+	parts := strings.Split(validToken, ".")
+	tamperedToken := parts[0] + "." + tamperedPayload + "." + parts[2]
+	reqTampered := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqTampered.Header.Set("Authorization", "Bearer "+tamperedToken)
+	wTampered := httptest.NewRecorder()
+	server.ServeHTTP(wTampered, reqTampered)
+	assert.Equal(t, http.StatusUnauthorized, wTampered.Code)
+}

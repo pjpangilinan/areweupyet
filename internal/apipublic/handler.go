@@ -67,15 +67,36 @@ func (rl *rateLimiter) allow(ip string, limit int, window time.Duration) bool {
 }
 
 func extractClientIP(r *http.Request) string {
+	// 1. Prefer verified RemoteAddr set from Lambda SourceIP or direct TCP socket
+	if r.RemoteAddr != "" {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil && host != "" {
+			return host
+		}
+		return r.RemoteAddr
+	}
+	// 2. Fallback to first hop of X-Forwarded-For if behind a proxy
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
+		first := strings.TrimSpace(parts[0])
+		if first != "" {
+			return first
+		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
+	return "unknown"
+}
+
+// isValidID validates that an identifier (tenantId or endpointId) is a safe alphanumeric string.
+func isValidID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
 	}
-	return r.RemoteAddr
+	for _, c := range id {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // PublicEndpointSummary exposes safe public status without sensitive configuration.
@@ -138,8 +159,8 @@ func (s *Server) routes() {
 
 func (s *Server) handleGetTenantStatus(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("tenantId")
-	if tenantID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenantId is required"})
+	if !isValidID(tenantID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenantId format"})
 		return
 	}
 
@@ -198,6 +219,10 @@ func (s *Server) handleGetTenantStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("tenantId")
 	endpointID := r.PathValue("id")
+	if !isValidID(tenantID) || !isValidID(endpointID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenantId or endpointId format"})
+		return
+	}
 
 	// Verify endpoint belongs to tenant
 	ep, err := s.store.GetEndpoint(r.Context(), tenantID, endpointID)
@@ -240,6 +265,9 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }

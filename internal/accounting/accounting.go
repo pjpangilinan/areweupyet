@@ -20,13 +20,13 @@ type UptimeStats struct {
 
 // TimelineEntry represents a formatted incident record for UI display.
 type TimelineEntry struct {
-	EndpointID        string    `json:"endpointId"`
-	StartedAt         time.Time `json:"startedAt"`
+	EndpointID        string     `json:"endpointId"`
+	StartedAt         time.Time  `json:"startedAt"`
 	ResolvedAt        *time.Time `json:"resolvedAt,omitempty"`
-	DurationSeconds   int64     `json:"durationSeconds"`
-	FormattedDuration string    `json:"formattedDuration"`
-	Reason            string    `json:"reason"`
-	IsOpen            bool      `json:"isOpen"`
+	DurationSeconds   int64      `json:"durationSeconds"`
+	FormattedDuration string     `json:"formattedDuration"`
+	Reason            string     `json:"reason"`
+	IsOpen            bool       `json:"isOpen"`
 }
 
 // CalculateUptime computes exact uptime percentage within a specified time window.

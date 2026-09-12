@@ -7,9 +7,13 @@ AGENTS.md
 docs/*
 !docs/screenshots/
 
-# Handoff notes
+# Handoff & interview preparation notes
 HANDOFF.md
 *handoff*.md
+INTERVIEW_PREP.md
+INTERVIEW_CHEAT_SHEET.md
+*interview*.md
+*cheat_sheet*.md
 
 # Dependencies & build outputs
 node_modules/

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,4 +99,34 @@ func TestPublicAPI_LambdaAdapter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, res.StatusCode)
 	assert.Contains(t, res.Headers["Content-Type"], "application/json")
+	assert.Equal(t, "nosniff", res.Headers["X-Content-Type-Options"])
+	assert.Equal(t, "DENY", res.Headers["X-Frame-Options"])
+}
+
+func TestPublicAPI_SecurityIDValidation(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+
+	// Invalid characters or path traversal attempt in tenantId
+	req := httptest.NewRequest(http.MethodGet, "/status/bad..tenant!@#", nil)
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Excessively long tenantId
+	longTenant := strings.Repeat("a", 65)
+	req = httptest.NewRequest(http.MethodGet, "/status/"+longTenant, nil)
+	w = httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestPublicAPI_SourceIPRateLimiting(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/status/test-tenant", nil)
+	req.RemoteAddr = "203.0.113.195:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+
+	// Verify extractClientIP prefers RemoteAddr over user-supplied XFF
+	ip := extractClientIP(req)
+	assert.Equal(t, "203.0.113.195", ip)
 }

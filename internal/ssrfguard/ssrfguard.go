@@ -13,31 +13,52 @@ import (
 
 var (
 	ErrBlockedIP      = errors.New("destination IP blocked: private, loopback, or metadata address")
+	ErrBlockedPort    = errors.New("destination port blocked: non-standard/dangerous protocol port")
 	ErrInvalidScheme  = errors.New("invalid URL scheme: must be http or https")
 	ErrRedirectFailed = errors.New("redirect target violates security policy")
 )
 
 // blockedCIDRs defines non-routable, private, link-local, and cloud metadata ranges.
 var blockedCIDRs = []string{
-	"0.0.0.0/8",          // Current network
-	"10.0.0.0/8",         // Private network
-	"100.64.0.0/10",      // Carrier-grade NAT
-	"127.0.0.0/8",        // Loopback
-	"169.254.0.0/16",     // Link-local / Cloud metadata (e.g. 169.254.169.254)
-	"172.16.0.0/12",      // Private network
-	"192.0.0.0/24",       // IETF protocol assignments
-	"192.0.2.0/24",       // TEST-NET-1
-	"192.88.99.0/24",     // 6to4 relay anycast
-	"192.168.0.0/16",     // Private network
-	"198.18.0.0/15",      // Network benchmark tests
-	"198.51.100.0/24",    // TEST-NET-2
-	"203.0.113.0/24",     // TEST-NET-3
-	"224.0.0.0/4",        // Multicast
-	"240.0.0.0/4",        // Reserved
-	"::/128",             // Unspecified IPv6
-	"::1/128",            // Loopback IPv6
-	"fc00::/7",           // Unique local address IPv6
-	"fe80::/10",          // Link-local IPv6
+	"0.0.0.0/8",       // Current network
+	"10.0.0.0/8",      // Private network
+	"100.64.0.0/10",   // Carrier-grade NAT
+	"127.0.0.0/8",     // Loopback
+	"169.254.0.0/16",  // Link-local / Cloud metadata (e.g. 169.254.169.254)
+	"172.16.0.0/12",   // Private network
+	"192.0.0.0/24",    // IETF protocol assignments
+	"192.0.2.0/24",    // TEST-NET-1
+	"192.88.99.0/24",  // 6to4 relay anycast
+	"192.168.0.0/16",  // Private network
+	"198.18.0.0/15",   // Network benchmark tests
+	"198.51.100.0/24", // TEST-NET-2
+	"203.0.113.0/24",  // TEST-NET-3
+	"224.0.0.0/4",     // Multicast
+	"240.0.0.0/4",     // Reserved
+	"::/128",          // Unspecified IPv6
+	"::1/128",         // Loopback IPv6
+	"2001::/32",       // Teredo tunneling
+	"2001:db8::/32",   // Documentation IPv6
+	"2002::/16",       // 6to4 prefix
+	"fc00::/7",        // Unique local address IPv6
+	"fe80::/10",       // Link-local IPv6
+}
+
+// blockedPorts defines sensitive protocol ports prohibited to prevent protocol injection and port abuse.
+var blockedPorts = map[string]bool{
+	"21":   true, // FTP
+	"22":   true, // SSH
+	"23":   true, // Telnet
+	"25":   true, // SMTP
+	"110":  true, // POP3
+	"135":  true, // RPC
+	"137":  true, // NetBIOS
+	"138":  true, // NetBIOS
+	"139":  true, // NetBIOS
+	"143":  true, // IMAP
+	"445":  true, // SMB
+	"587":  true, // SMTP Submission
+	"3389": true, // RDP
 }
 
 var parsedBlockedCIDRs []*net.IPNet
@@ -51,10 +72,14 @@ func init() {
 	}
 }
 
-// IsBlockedIP checks if an IP is in the forbidden ranges.
+// IsBlockedIP checks if an IP is in the forbidden ranges, normalizing IPv4-mapped IPv6 addresses.
 func IsBlockedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
+	}
+	// Normalize IPv4-mapped IPv6 addresses (e.g. ::ffff:169.254.169.254 -> 169.254.169.254)
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
 	}
 	for _, block := range parsedBlockedCIDRs {
 		if block.Contains(ip) {
@@ -73,6 +98,11 @@ func ValidateTargetURL(targetURL string) (*url.URL, error) {
 
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, ErrInvalidScheme
+	}
+
+	port := u.Port()
+	if port != "" && blockedPorts[port] {
+		return nil, fmt.Errorf("%w: port %s is restricted", ErrBlockedPort, port)
 	}
 
 	host := u.Hostname()
@@ -112,9 +142,12 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		Timeout:   timeout,
 		KeepAlive: 30 * time.Second,
 		Control: func(network, address string, c syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
+			host, port, err := net.SplitHostPort(address)
 			if err != nil {
 				return err
+			}
+			if blockedPorts[port] {
+				return ErrBlockedPort
 			}
 			ip := net.ParseIP(host)
 			if ip != nil && IsBlockedIP(ip) {
@@ -130,20 +163,32 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-			if err != nil {
-				return nil, err
+			if blockedPorts[port] {
+				return nil, ErrBlockedPort
 			}
+
 			var validIP net.IP
-			for _, ip := range ips {
-				if !IsBlockedIP(ip) {
-					validIP = ip
-					break
+			if directIP := net.ParseIP(host); directIP != nil {
+				if IsBlockedIP(directIP) {
+					return nil, ErrBlockedIP
 				}
+				validIP = directIP
+			} else {
+				ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				for _, ip := range ips {
+					if IsBlockedIP(ip) {
+						return nil, fmt.Errorf("%w: %s resolves to forbidden IP %s", ErrBlockedIP, host, ip.String())
+					}
+				}
+				if len(ips) == 0 {
+					return nil, errors.New("no IP addresses found for host")
+				}
+				validIP = ips[0]
 			}
-			if validIP == nil {
-				return nil, ErrBlockedIP
-			}
+
 			return dialer.DialContext(ctx, network, net.JoinHostPort(validIP.String(), port))
 		},
 		ResponseHeaderTimeout: timeout,

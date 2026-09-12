@@ -36,9 +36,9 @@ type Store interface {
 type MemoryStore struct {
 	mu          sync.RWMutex
 	filePath    string
-	endpoints   map[string]models.Endpoint    // key: tenantID#endpointID
+	endpoints   map[string]models.Endpoint     // key: tenantID#endpointID
 	pingResults map[string][]models.PingResult // key: endpointID
-	incidents   map[string][]models.Incident  // key: endpointID
+	incidents   map[string][]models.Incident   // key: endpointID
 }
 
 // NewMemoryStore initializes a fresh in-memory mock store.
@@ -57,9 +57,9 @@ func NewPersistentMemoryStore(filePath string) *MemoryStore {
 	if filePath != "" {
 		if data, err := os.ReadFile(filePath); err == nil {
 			var state struct {
-				Endpoints   map[string]models.Endpoint    `json:"endpoints"`
+				Endpoints   map[string]models.Endpoint     `json:"endpoints"`
 				PingResults map[string][]models.PingResult `json:"pingResults"`
-				Incidents   map[string][]models.Incident  `json:"incidents"`
+				Incidents   map[string][]models.Incident   `json:"incidents"`
 			}
 			if err := json.Unmarshal(data, &state); err == nil {
 				if state.Endpoints != nil {
@@ -82,9 +82,9 @@ func (m *MemoryStore) saveLocked() {
 		return
 	}
 	state := struct {
-		Endpoints   map[string]models.Endpoint    `json:"endpoints"`
+		Endpoints   map[string]models.Endpoint     `json:"endpoints"`
 		PingResults map[string][]models.PingResult `json:"pingResults"`
-		Incidents   map[string][]models.Incident  `json:"incidents"`
+		Incidents   map[string][]models.Incident   `json:"incidents"`
 	}{
 		Endpoints:   m.endpoints,
 		PingResults: m.pingResults,

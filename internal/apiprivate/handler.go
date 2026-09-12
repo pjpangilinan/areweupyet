@@ -71,6 +71,7 @@ type Server struct {
 	mux                *http.ServeMux
 	tenantCheckLimiter *rateLimiter
 	webhookTestLimiter *rateLimiter
+	verifier           *JWKSVerifier
 }
 
 type CreateEndpointRequest struct {
@@ -98,14 +99,29 @@ type TestWebhookRequest struct {
 
 // NewServer initializes the HTTP router for private tenant operations.
 func NewServer(store dynamo.Store) *Server {
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "ap-southeast-1"
+	}
+	userPoolID := os.Getenv("COGNITO_USER_POOL_ID")
+	if userPoolID == "" {
+		userPoolID = "ap-southeast-1_2Ojq7re38"
+	}
+
 	s := &Server{
 		store:              store,
 		mux:                http.NewServeMux(),
 		tenantCheckLimiter: newRateLimiter(),
 		webhookTestLimiter: newRateLimiter(),
+		verifier:           NewJWKSVerifier(region, userPoolID),
 	}
 	s.routes()
 	return s
+}
+
+// SetVerifier allows injecting a custom or mock JWKSVerifier for testing.
+func (s *Server) SetVerifier(v *JWKSVerifier) {
+	s.verifier = v
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,34 +138,49 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /settings/webhook/test", s.handleTestWebhook)
 }
 
-// extractTenantID retrieves the authenticated tenant ID from context, headers, or Bearer JWT.
-// In AWS Lambda production, a valid Bearer token (or authorizer context) is strictly required.
-func extractTenantID(r *http.Request) (string, error) {
-	// 1. From context (set by Lambda authorizer adapter)
+// extractTenantID retrieves and cryptographically verifies the authenticated tenant ID.
+// In AWS Lambda production, a valid Bearer token signed by Cognito is strictly required.
+func (s *Server) extractTenantID(r *http.Request) (string, error) {
+	// 1. From context (set by verified Lambda authorizer, if present)
 	if tenantID, ok := r.Context().Value("tenantId").(string); ok && tenantID != "" {
-		return tenantID, nil
+		if isValidID(tenantID) {
+			return tenantID, nil
+		}
 	}
-	// 2. From Authorization: Bearer <token>
+
+	// 2. From Authorization: Bearer <token> (cryptographically verified against Cognito JWKS)
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 		token := strings.TrimSpace(authHeader[7:])
-		if sub := extractSubFromJWT(token); sub != "" {
-			return sub, nil
+		if s.verifier != nil {
+			claims, err := s.verifier.VerifyToken(r.Context(), token)
+			if err == nil && claims != nil && isValidID(claims.Sub) {
+				return claims.Sub, nil
+			}
+			// In production on AWS Lambda, token validation failure is strictly fatal
+			if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
+				if err != nil {
+					return "", fmt.Errorf("unauthorized: %w", err)
+				}
+				return "", errors.New("unauthorized: invalid token claims")
+			}
 		}
 	}
-	// 3. For local development or testing only (when not in AWS Lambda)
+
+	// 3. For local development or unit testing only (when not in AWS Lambda)
 	isAWS := os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != ""
 	if !isAWS {
-		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
+		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" && isValidID(tenantID) {
 			return tenantID, nil
 		}
 		return "demo", nil
 	}
+
 	return "", errors.New("unauthorized: valid session token required")
 }
 
 func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
@@ -168,12 +199,13 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req CreateEndpointRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -255,13 +287,18 @@ func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetEndpoint(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
 	endpointID := r.PathValue("id")
+	if !isValidID(endpointID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid endpoint id"})
+		return
+	}
+
 	ep, err := s.store.GetEndpoint(r.Context(), tenantID, endpointID)
 	if err != nil {
 		if errors.Is(err, dynamo.ErrEndpointNotFound) {
@@ -276,13 +313,18 @@ func (s *Server) handleGetEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateEndpoint(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
 	endpointID := r.PathValue("id")
+	if !isValidID(endpointID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid endpoint id"})
+		return
+	}
+
 	existing, err := s.store.GetEndpoint(r.Context(), tenantID, endpointID)
 	if err != nil {
 		if errors.Is(err, dynamo.ErrEndpointNotFound) {
@@ -293,6 +335,7 @@ func (s *Server) handleUpdateEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req UpdateEndpointRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -357,13 +400,18 @@ func (s *Server) handleUpdateEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteEndpoint(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
 	endpointID := r.PathValue("id")
+	if !isValidID(endpointID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid endpoint id"})
+		return
+	}
+
 	// Verify exists and belongs to tenant
 	if _, err := s.store.GetEndpoint(r.Context(), tenantID, endpointID); err != nil {
 		if errors.Is(err, dynamo.ErrEndpointNotFound) {
@@ -385,13 +433,18 @@ func (s *Server) handleDeleteEndpoint(w http.ResponseWriter, r *http.Request) {
 // handleManualCheckEndpoint triggers an immediate rate-limited synthetic ping.
 // Hard safeguard: minimum 30-second cooldown per endpoint to prevent ping spam and DDoS.
 func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
 	endpointID := r.PathValue("id")
+	if !isValidID(endpointID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid endpoint id"})
+		return
+	}
+
 	ep, err := s.store.GetEndpoint(r.Context(), tenantID, endpointID)
 	if err != nil {
 		if errors.Is(err, dynamo.ErrEndpointNotFound) {
@@ -417,7 +470,7 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 	if len(pings) > 0 {
 		elapsed := time.Since(pings[0].CheckedAt)
 		if elapsed < 30*time.Second {
-			retryAfter := int((30 * time.Second - elapsed).Seconds()) + 1
+			retryAfter := int((30*time.Second - elapsed).Seconds()) + 1
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{
 				"error":             fmt.Sprintf("Rate limit guard: please wait %d seconds before checking again", retryAfter),
@@ -495,12 +548,13 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 
 // handleTestWebhook delivers a test webhook payload with SSRF protection and HMAC signature.
 func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
+	tenantID, err := s.extractTenantID(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req TestWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -567,8 +621,24 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// isValidID validates that an identifier (tenantId or endpointId) is a safe alphanumeric string.
+func isValidID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }

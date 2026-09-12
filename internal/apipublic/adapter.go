@@ -50,6 +50,11 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		httpReq.Header.Set(k, v)
 	}
 
+	// Set RemoteAddr to verified TCP source IP from Lambda Function URL context
+	if req.RequestContext.HTTP.SourceIP != "" {
+		httpReq.RemoteAddr = req.RequestContext.HTTP.SourceIP
+	}
+
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httpReq)
 

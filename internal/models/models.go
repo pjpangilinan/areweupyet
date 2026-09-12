@@ -22,13 +22,13 @@ type Endpoint struct {
 
 // PingResult represents the result of a single check.
 type PingResult struct {
-	EndpointID   string        `json:"endpointId" dynamodbav:"endpointId"`
-	CheckedAt    time.Time     `json:"checkedAt" dynamodbav:"checkedAt"`
-	StatusCode   int           `json:"statusCode" dynamodbav:"statusCode"`
-	LatencyMs    int64         `json:"latencyMs" dynamodbav:"latencyMs"`
-	Success      bool          `json:"success" dynamodbav:"success"`
-	ErrorMessage string        `json:"errorMessage,omitempty" dynamodbav:"errorMessage,omitempty"`
-	TTL          int64         `json:"ttl" dynamodbav:"ttl"` // Unix timestamp for auto-cleanup
+	EndpointID   string    `json:"endpointId" dynamodbav:"endpointId"`
+	CheckedAt    time.Time `json:"checkedAt" dynamodbav:"checkedAt"`
+	StatusCode   int       `json:"statusCode" dynamodbav:"statusCode"`
+	LatencyMs    int64     `json:"latencyMs" dynamodbav:"latencyMs"`
+	Success      bool      `json:"success" dynamodbav:"success"`
+	ErrorMessage string    `json:"errorMessage,omitempty" dynamodbav:"errorMessage,omitempty"`
+	TTL          int64     `json:"ttl" dynamodbav:"ttl"` // Unix timestamp for auto-cleanup
 }
 
 // Incident tracks downtime when 2 consecutive pings fail until 1 passes.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +50,12 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		httpReq.Header.Set(k, v)
 	}
 
-	// 1. From IAM Authorizer (when Lambda Function URL uses AWS_IAM auth)
+	// Set RemoteAddr to verified TCP source IP from Lambda Function URL context
+	if req.RequestContext.HTTP.SourceIP != "" {
+		httpReq.RemoteAddr = req.RequestContext.HTTP.SourceIP
+	}
+
+	// From IAM Authorizer (when Lambda Function URL uses AWS_IAM auth)
 	if req.RequestContext.Authorizer != nil && req.RequestContext.Authorizer.IAM != nil {
 		callerID := req.RequestContext.Authorizer.IAM.CallerID
 		if callerID == "" {
@@ -59,18 +63,6 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		}
 		if callerID != "" {
 			httpReq = httpReq.WithContext(context.WithValue(httpReq.Context(), "tenantId", callerID))
-		}
-	}
-
-	// 2. From Authorization Bearer JWT (Cognito user pool token)
-	authHeader := req.Headers["authorization"]
-	if authHeader == "" {
-		authHeader = req.Headers["Authorization"]
-	}
-	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-		token := strings.TrimSpace(authHeader[7:])
-		if tenantID := extractSubFromJWT(token); tenantID != "" {
-			httpReq = httpReq.WithContext(context.WithValue(httpReq.Context(), "tenantId", tenantID))
 		}
 	}
 
@@ -90,34 +82,4 @@ func HandleLambdaRequest(ctx context.Context, handler http.Handler, req events.L
 		Headers:    resHeaders,
 		Body:       recorder.Body.String(),
 	}, nil
-}
-
-// extractSubFromJWT extracts the "sub" claim from a JWT payload segment.
-func extractSubFromJWT(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	payloadSegment := parts[1]
-	if rem := len(payloadSegment) % 4; rem != 0 {
-		payloadSegment += strings.Repeat("=", 4-rem)
-	}
-	data, err := base64.URLEncoding.DecodeString(payloadSegment)
-	if err != nil {
-		data, err = base64.RawURLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-	var claims struct {
-		Sub          string `json:"sub"`
-		CustomTenant string `json:"custom_tenant"`
-	}
-	if err := json.Unmarshal(data, &claims); err != nil {
-		return ""
-	}
-	if claims.CustomTenant != "" {
-		return claims.CustomTenant
-	}
-	return claims.Sub
 }
