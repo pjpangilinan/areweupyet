@@ -23,6 +23,7 @@ type Store interface {
 	GetEndpoint(ctx context.Context, tenantID, endpointID string) (*models.Endpoint, error)
 	ListEndpoints(ctx context.Context, tenantID string) ([]models.Endpoint, error)
 	UpdateEndpoint(ctx context.Context, ep models.Endpoint) error
+	UpdateEndpointStatus(ctx context.Context, tenantID, endpointID string, status string, consecutiveFail int, nextCheckAt, updatedAt time.Time, lastNotifiedAt *time.Time, lastNotifiedEvent string) error
 	DeleteEndpointCascade(ctx context.Context, tenantID, endpointID string) error
 	ClaimDueEndpoints(ctx context.Context, now time.Time, limit int) ([]models.Endpoint, error)
 	RecordPingResult(ctx context.Context, res models.PingResult) error
@@ -30,15 +31,18 @@ type Store interface {
 	SaveIncident(ctx context.Context, inc models.Incident) error
 	GetOpenIncident(ctx context.Context, endpointID string) (*models.Incident, error)
 	ListIncidents(ctx context.Context, endpointID string) ([]models.Incident, error)
+	GetTenantSettings(ctx context.Context, tenantID string) (*models.TenantSettings, error)
+	SaveTenantSettings(ctx context.Context, settings models.TenantSettings) error
 }
 
 // MemoryStore provides a zero-docker, 100% local in-memory store for continuous local testing.
 type MemoryStore struct {
 	mu          sync.RWMutex
 	filePath    string
-	endpoints   map[string]models.Endpoint     // key: tenantID#endpointID
-	pingResults map[string][]models.PingResult // key: endpointID
-	incidents   map[string][]models.Incident   // key: endpointID
+	endpoints   map[string]models.Endpoint       // key: tenantID#endpointID
+	pingResults map[string][]models.PingResult   // key: endpointID
+	incidents   map[string][]models.Incident     // key: endpointID
+	settings    map[string]models.TenantSettings // key: tenantID
 }
 
 // NewMemoryStore initializes a fresh in-memory mock store.
@@ -47,6 +51,7 @@ func NewMemoryStore() *MemoryStore {
 		endpoints:   make(map[string]models.Endpoint),
 		pingResults: make(map[string][]models.PingResult),
 		incidents:   make(map[string][]models.Incident),
+		settings:    make(map[string]models.TenantSettings),
 	}
 }
 
@@ -57,9 +62,10 @@ func NewPersistentMemoryStore(filePath string) *MemoryStore {
 	if filePath != "" {
 		if data, err := os.ReadFile(filePath); err == nil {
 			var state struct {
-				Endpoints   map[string]models.Endpoint     `json:"endpoints"`
-				PingResults map[string][]models.PingResult `json:"pingResults"`
-				Incidents   map[string][]models.Incident   `json:"incidents"`
+				Endpoints   map[string]models.Endpoint       `json:"endpoints"`
+				PingResults map[string][]models.PingResult   `json:"pingResults"`
+				Incidents   map[string][]models.Incident     `json:"incidents"`
+				Settings    map[string]models.TenantSettings `json:"settings"`
 			}
 			if err := json.Unmarshal(data, &state); err == nil {
 				if state.Endpoints != nil {
@@ -70,6 +76,9 @@ func NewPersistentMemoryStore(filePath string) *MemoryStore {
 				}
 				if state.Incidents != nil {
 					m.incidents = state.Incidents
+				}
+				if state.Settings != nil {
+					m.settings = state.Settings
 				}
 			}
 		}
@@ -82,13 +91,15 @@ func (m *MemoryStore) saveLocked() {
 		return
 	}
 	state := struct {
-		Endpoints   map[string]models.Endpoint     `json:"endpoints"`
-		PingResults map[string][]models.PingResult `json:"pingResults"`
-		Incidents   map[string][]models.Incident   `json:"incidents"`
+		Endpoints   map[string]models.Endpoint       `json:"endpoints"`
+		PingResults map[string][]models.PingResult   `json:"pingResults"`
+		Incidents   map[string][]models.Incident     `json:"incidents"`
+		Settings    map[string]models.TenantSettings `json:"settings"`
 	}{
 		Endpoints:   m.endpoints,
 		PingResults: m.pingResults,
 		Incidents:   m.incidents,
+		Settings:    m.settings,
 	}
 	if data, err := json.MarshalIndent(state, "", "  "); err == nil {
 		_ = os.WriteFile(m.filePath, data, 0644)
@@ -121,6 +132,9 @@ func (m *MemoryStore) GetEndpoint(_ context.Context, tenantID, endpointID string
 	defer m.mu.RUnlock()
 
 	if tenantID != "" {
+		if endpointID == "_settings" {
+			return nil, ErrEndpointNotFound
+		}
 		key := tenantID + "#" + endpointID
 		ep, ok := m.endpoints[key]
 		if !ok {
@@ -131,7 +145,7 @@ func (m *MemoryStore) GetEndpoint(_ context.Context, tenantID, endpointID string
 
 	// Fallback if tenantID is omitted: look up by endpointID across tenants
 	for _, ep := range m.endpoints {
-		if ep.EndpointID == endpointID {
+		if ep.EndpointID == endpointID && ep.EndpointID != "_settings" {
 			return &ep, nil
 		}
 	}
@@ -145,7 +159,7 @@ func (m *MemoryStore) ListEndpoints(_ context.Context, tenantID string) ([]model
 
 	var list []models.Endpoint
 	for _, ep := range m.endpoints {
-		if ep.TenantID == tenantID {
+		if ep.TenantID == tenantID && ep.EndpointID != "_settings" {
 			list = append(list, ep)
 		}
 	}
@@ -167,6 +181,61 @@ func (m *MemoryStore) UpdateEndpoint(_ context.Context, ep models.Endpoint) erro
 		}
 	}
 	m.endpoints[key] = ep
+	m.saveLocked()
+	return nil
+}
+
+func (m *MemoryStore) UpdateEndpointStatus(_ context.Context, tenantID, endpointID string, status string, consecutiveFail int, nextCheckAt, updatedAt time.Time, lastNotifiedAt *time.Time, lastNotifiedEvent string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := tenantID + "#" + endpointID
+	ep, ok := m.endpoints[key]
+	if !ok {
+		for k, existing := range m.endpoints {
+			if existing.EndpointID == endpointID {
+				key = k
+				ep = existing
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return ErrEndpointNotFound
+		}
+	}
+
+	ep.Status = status
+	ep.ConsecutiveFail = consecutiveFail
+	ep.NextCheckAt = nextCheckAt
+	ep.UpdatedAt = updatedAt
+	if lastNotifiedAt != nil {
+		ep.LastNotifiedAt = lastNotifiedAt
+		ep.LastNotifiedEvent = lastNotifiedEvent
+	}
+	m.endpoints[key] = ep
+	m.saveLocked()
+	return nil
+}
+
+func (m *MemoryStore) GetTenantSettings(_ context.Context, tenantID string) (*models.TenantSettings, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	s, ok := m.settings[tenantID]
+	if !ok {
+		return nil, nil
+	}
+	copy := s
+	return &copy, nil
+}
+
+func (m *MemoryStore) SaveTenantSettings(_ context.Context, settings models.TenantSettings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	settings.EndpointID = "_settings"
+	m.settings[settings.TenantID] = settings
 	m.saveLocked()
 	return nil
 }

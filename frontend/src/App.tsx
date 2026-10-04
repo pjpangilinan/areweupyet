@@ -23,7 +23,14 @@ import { AuthModal } from './components/AuthModal';
 import { EndpointDetailModal } from './components/EndpointDetailModal';
 import { StatusPage } from './StatusPage';
 import { TermsOfService, PrivacyPolicy } from './Legal';
-import { fetchEndpoints, createEndpoint, deleteEndpoint, testWebhook } from './api/client';
+import {
+  fetchEndpoints,
+  createEndpoint,
+  deleteEndpoint,
+  testWebhook,
+  fetchWebhookSettings,
+  updateWebhookSettings,
+} from './api/client';
 
 const DashboardApp: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -46,9 +53,10 @@ const DashboardApp: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Settings State
-  const [webhookUrl, setWebhookUrl] = useState('https://api.mycompany.com/webhooks/uptime');
-  const [webhookSecret] = useState('sec_live_9b8f41e0a24d57c3e1b');
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState('');
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+  const [isSavingWebhook, setIsSavingWebhook] = useState(false);
   const [webhookTestResult, setWebhookTestResult] = useState<string | null>(null);
   const [webhookTestError, setWebhookTestError] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
@@ -77,6 +85,14 @@ const DashboardApp: React.FC = () => {
     try {
       const data = await fetchEndpoints(user.token, user.tenantId);
       setEndpoints(data || []);
+      fetchWebhookSettings(user.token, user.tenantId)
+        .then((s) => {
+          if (s) {
+            setWebhookUrl(s.webhookUrl || '');
+            setWebhookSecret(s.secret || '');
+          }
+        })
+        .catch(() => {});
     } catch (err) {
       console.warn('Backend fetch error:', err);
     } finally {
@@ -208,6 +224,33 @@ const DashboardApp: React.FC = () => {
       setWebhookTestError(msg);
     } finally {
       setIsTestingWebhook(false);
+    }
+  };
+
+  const handleSaveWebhook = async () => {
+    if (!user) {
+      setWebhookTestError('Please sign in to save webhook settings');
+      return;
+    }
+    setIsSavingWebhook(true);
+    setWebhookTestError(null);
+    setWebhookTestResult(null);
+    try {
+      const res = await updateWebhookSettings(
+        { webhookUrl, secret: webhookSecret },
+        user.token,
+        user.tenantId
+      );
+      if (res && res.secret) {
+        setWebhookSecret(res.secret);
+      }
+      setWebhookTestResult('Webhook settings saved successfully');
+      setTimeout(() => setWebhookTestResult(null), 5000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save webhook settings';
+      setWebhookTestError(msg);
+    } finally {
+      setIsSavingWebhook(false);
     }
   };
 
@@ -641,8 +684,15 @@ const DashboardApp: React.FC = () => {
                     className="flex-1 px-3 py-2 bg-[#131316] border border-[#2a2a2d] rounded-lg text-xs font-mono text-[#e4e1e6] focus:outline-none focus:border-primary"
                   />
                   <button
+                    onClick={handleSaveWebhook}
+                    disabled={isSavingWebhook}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary hover:bg-primary/90 text-xs font-mono text-[#131316] font-semibold transition-colors disabled:opacity-50"
+                  >
+                    <span>{isSavingWebhook ? 'Saving...' : 'Save'}</span>
+                  </button>
+                  <button
                     onClick={handleTestWebhook}
-                    disabled={isTestingWebhook}
+                    disabled={isTestingWebhook || isSavingWebhook}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#2a2a2d] hover:bg-[#353438] text-xs font-mono text-[#e4e1e6] transition-colors disabled:opacity-50"
                   >
                     <Send className={`w-3.5 h-3.5 text-primary ${isTestingWebhook ? 'animate-pulse' : ''}`} />

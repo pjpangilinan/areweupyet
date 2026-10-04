@@ -29,6 +29,8 @@ const lambdaFunctions = new LambdaFunctions(functionsStack, 'AreWeUpYetFunctions
   endpointsTable: dataTables.endpointsTable,
   pingResultsTable: dataTables.pingResultsTable,
   incidentsTable: dataTables.incidentsTable,
+  userPoolId: backend.auth.resources.userPool.userPoolId,
+  userPoolClientId: backend.auth.resources.userPoolClient.userPoolClientId,
 });
 
 // Watch the watcher: CloudWatch alarm on dispatcher failure

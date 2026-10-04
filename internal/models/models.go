@@ -15,9 +15,20 @@ type Endpoint struct {
 	NextCheckAt     time.Time `json:"nextCheckAt" dynamodbav:"nextCheckAt"`
 	ConsecutiveFail int       `json:"consecutiveFail" dynamodbav:"consecutiveFail"`
 	Status          string    `json:"status" dynamodbav:"status"` // "UP" | "DOWN" | "PENDING"
-	Group           string    `json:"group,omitempty" dynamodbav:"group,omitempty"`
-	CreatedAt       time.Time `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+	Group             string     `json:"group,omitempty" dynamodbav:"group,omitempty"`
+	LastNotifiedAt    *time.Time `json:"lastNotifiedAt,omitempty" dynamodbav:"lastNotifiedAt,omitempty"`
+	LastNotifiedEvent string     `json:"lastNotifiedEvent,omitempty" dynamodbav:"lastNotifiedEvent,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+// TenantSettings stores workspace alert and webhook preferences.
+type TenantSettings struct {
+	TenantID      string    `json:"tenantId" dynamodbav:"tenantId"`
+	EndpointID    string    `json:"endpointId" dynamodbav:"endpointId"` // Constant "_settings"
+	WebhookURL    string    `json:"webhookUrl" dynamodbav:"webhookUrl"`
+	WebhookSecret string    `json:"webhookSecret" dynamodbav:"webhookSecret"`
+	UpdatedAt     time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 // PingResult represents the result of a single check.

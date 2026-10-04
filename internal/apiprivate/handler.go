@@ -104,17 +104,21 @@ func NewServer(store dynamo.Store) *Server {
 		region = "ap-southeast-1"
 	}
 	userPoolID := os.Getenv("COGNITO_USER_POOL_ID")
-	if userPoolID == "" {
-		userPoolID = "ap-southeast-1_2Ojq7re38"
-	}
+	appClientID := os.Getenv("COGNITO_APP_CLIENT_ID")
 
 	s := &Server{
 		store:              store,
 		mux:                http.NewServeMux(),
 		tenantCheckLimiter: newRateLimiter(),
 		webhookTestLimiter: newRateLimiter(),
-		verifier:           NewJWKSVerifier(region, userPoolID),
 	}
+	if userPoolID != "" {
+		s.verifier = NewJWKSVerifier(region, userPoolID)
+		if appClientID != "" {
+			s.verifier.SetAppClientID(appClientID)
+		}
+	}
+
 	s.routes()
 	return s
 }
@@ -135,6 +139,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /endpoints/{id}", s.handleUpdateEndpoint)
 	s.mux.HandleFunc("DELETE /endpoints/{id}", s.handleDeleteEndpoint)
 	s.mux.HandleFunc("POST /endpoints/{id}/check", s.handleManualCheckEndpoint)
+	s.mux.HandleFunc("GET /settings/webhook", s.handleGetWebhookSettings)
+	s.mux.HandleFunc("PUT /settings/webhook", s.handleUpdateWebhookSettings)
 	s.mux.HandleFunc("POST /settings/webhook/test", s.handleTestWebhook)
 }
 
@@ -164,6 +170,12 @@ func (s *Server) extractTenantID(r *http.Request) (string, error) {
 				}
 				return "", errors.New("unauthorized: invalid token claims")
 			}
+		} else if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") == "" {
+			// In local dev/unit testing without live Cognito JWKS, extract unverified claims
+			claims, err := parseUnverifiedClaims(token)
+			if err == nil && claims != nil && isValidID(claims.Sub) {
+				return claims.Sub, nil
+			}
 		}
 	}
 
@@ -173,7 +185,9 @@ func (s *Server) extractTenantID(r *http.Request) (string, error) {
 		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" && isValidID(tenantID) {
 			return tenantID, nil
 		}
-		return "demo", nil
+		if os.Getenv("USE_MEMORY_STORE") == "true" || os.Getenv("ALLOW_DEV_AUTH") == "true" {
+			return "demo", nil
+		}
 	}
 
 	return "", errors.New("unauthorized: valid session token required")
@@ -344,6 +358,10 @@ func (s *Server) handleUpdateEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name != "" {
 		trimmedName := strings.TrimSpace(req.Name)
+		if trimmedName == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name cannot be empty"})
+			return
+		}
 		if len(trimmedName) > 100 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name cannot exceed 100 characters"})
 			return
@@ -495,7 +513,7 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 	})
 
 	now := time.Now().UTC()
-	ttl := now.Add(30 * 24 * time.Hour).Unix() // 30-day Always-Free TTL
+	ttl := now.AddDate(0, 0, 90).Unix() // 90-day Always-Free TTL
 
 	pingRecord := models.PingResult{
 		EndpointID:   ep.EndpointID,
@@ -516,7 +534,9 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 			ep.Status = "DOWN"
 			openInc := models.Incident{
 				EndpointID: ep.EndpointID,
+				TenantID:   ep.TenantID,
 				StartedAt:  now,
+				Reason:     checkRes.ErrorMessage,
 				ResolvedAt: nil,
 			}
 			_ = s.store.SaveIncident(r.Context(), openInc)
@@ -527,6 +547,7 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 			openInc, _ := s.store.GetOpenIncident(r.Context(), ep.EndpointID)
 			if openInc != nil {
 				openInc.ResolvedAt = &now
+				openInc.DurationSeconds = int64(now.Sub(openInc.StartedAt).Seconds())
 				_ = s.store.SaveIncident(r.Context(), *openInc)
 				incidentStateChanged = true
 			}
@@ -537,7 +558,7 @@ func (s *Server) handleManualCheckEndpoint(w http.ResponseWriter, r *http.Reques
 
 	ep.NextCheckAt = now.Add(time.Duration(ep.FrequencyMin) * time.Minute)
 	ep.UpdatedAt = now
-	_ = s.store.UpdateEndpoint(r.Context(), *ep)
+	_ = s.store.UpdateEndpointStatus(r.Context(), ep.TenantID, ep.EndpointID, ep.Status, ep.ConsecutiveFail, ep.NextCheckAt, ep.UpdatedAt, ep.LastNotifiedAt, ep.LastNotifiedEvent)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"result":               pingRecord,
@@ -586,7 +607,12 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 
 	secret := req.Secret
 	if secret == "" {
-		secret = "sec_live_" + tenantID
+		settings, _ := s.store.GetTenantSettings(r.Context(), tenantID)
+		if settings != nil && settings.WebhookSecret != "" {
+			secret = settings.WebhookSecret
+		} else {
+			secret = "sec_live_" + generateRandomID(16)
+		}
 	}
 
 	testPayload := models.WebhookPayload{
@@ -618,6 +644,87 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 		"message":       "Test webhook delivered successfully",
 		"event":         testPayload.Event,
 		"signatureSent": signature,
+	})
+}
+
+func (s *Server) handleGetWebhookSettings(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := s.extractTenantID(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	settings, err := s.store.GetTenantSettings(r.Context(), tenantID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load webhook settings"})
+		return
+	}
+
+	if settings == nil {
+		settings = &models.TenantSettings{
+			TenantID:      tenantID,
+			EndpointID:    "_settings",
+			WebhookURL:    "",
+			WebhookSecret: "sec_live_" + generateRandomID(16),
+			UpdatedAt:     time.Now().UTC(),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"webhookUrl": settings.WebhookURL,
+		"secret":     settings.WebhookSecret,
+	})
+}
+
+func (s *Server) handleUpdateWebhookSettings(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := s.extractTenantID(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req struct {
+		WebhookURL string `json:"webhookUrl"`
+		Secret     string `json:"secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.WebhookURL = strings.TrimSpace(req.WebhookURL)
+	if req.WebhookURL != "" {
+		if _, err := ssrfguard.ValidateTargetURL(req.WebhookURL); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook URL: " + err.Error()})
+			return
+		}
+	}
+
+	req.Secret = strings.TrimSpace(req.Secret)
+	if req.Secret == "" {
+		req.Secret = "sec_live_" + generateRandomID(16)
+	} else if len(req.Secret) < 8 || len(req.Secret) > 128 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signing secret must be between 8 and 128 characters"})
+		return
+	}
+
+	settings := models.TenantSettings{
+		TenantID:      tenantID,
+		EndpointID:    "_settings",
+		WebhookURL:    req.WebhookURL,
+		WebhookSecret: req.Secret,
+		UpdatedAt:     time.Now().UTC(),
+	}
+
+	if err := s.store.SaveTenantSettings(r.Context(), settings); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save webhook settings"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"webhookUrl": settings.WebhookURL,
+		"secret":     settings.WebhookSecret,
 	})
 }
 

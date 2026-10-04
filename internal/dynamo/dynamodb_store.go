@@ -66,6 +66,10 @@ func (d *DynamoStore) CreateEndpoint(ctx context.Context, ep models.Endpoint) er
 
 // GetEndpoint retrieves a single endpoint by PK (tenantId) and SK (endpointId).
 func (d *DynamoStore) GetEndpoint(ctx context.Context, tenantID, endpointID string) (*models.Endpoint, error) {
+	if endpointID == "_settings" {
+		return nil, ErrEndpointNotFound
+	}
+
 	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(d.endpointsTable),
 		Key: map[string]types.AttributeValue{
@@ -87,7 +91,7 @@ func (d *DynamoStore) GetEndpoint(ctx context.Context, tenantID, endpointID stri
 	return &ep, nil
 }
 
-// ListEndpoints queries all endpoints for a tenant by PK tenantId.
+// ListEndpoints queries all endpoints for a tenant by PK tenantId with strong consistency.
 func (d *DynamoStore) ListEndpoints(ctx context.Context, tenantID string) ([]models.Endpoint, error) {
 	keyCond := expression.Key("tenantId").Equal(expression.Value(tenantID))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
@@ -100,19 +104,27 @@ func (d *DynamoStore) ListEndpoints(ctx context.Context, tenantID string) ([]mod
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query endpoints: %w", err)
 	}
 
-	var endpoints []models.Endpoint
-	if err := attributevalue.UnmarshalListOfMaps(out.Items, &endpoints); err != nil {
+	var rawList []models.Endpoint
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &rawList); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal endpoints list: %w", err)
+	}
+
+	var endpoints []models.Endpoint
+	for _, ep := range rawList {
+		if ep.EndpointID != "_settings" {
+			endpoints = append(endpoints, ep)
+		}
 	}
 	return endpoints, nil
 }
 
-// UpdateEndpoint updates an existing endpoint.
+// UpdateEndpoint updates an existing endpoint without overwriting runtime status.
 func (d *DynamoStore) UpdateEndpoint(ctx context.Context, ep models.Endpoint) error {
 	av, err := attributevalue.MarshalMap(ep)
 	if err != nil {
@@ -134,9 +146,116 @@ func (d *DynamoStore) UpdateEndpoint(ctx context.Context, ep models.Endpoint) er
 	return nil
 }
 
-// DeleteEndpointCascade deletes the endpoint, all its ping results, and all its incidents.
+// UpdateEndpointStatus atomically updates only telemetry & scheduler fields to prevent racing with user edits.
+func (d *DynamoStore) UpdateEndpointStatus(ctx context.Context, tenantID, endpointID string, status string, consecutiveFail int, nextCheckAt, updatedAt time.Time, lastNotifiedAt *time.Time, lastNotifiedEvent string) error {
+	nowStr := nextCheckAt.Format(time.RFC3339Nano)
+	upStr := updatedAt.Format(time.RFC3339Nano)
+
+	updateExpr := "SET #s = :status, consecutiveFail = :cf, nextCheckAt = :nc, updatedAt = :ua"
+	exprAttrVals := map[string]types.AttributeValue{
+		":status": &types.AttributeValueMemberS{Value: status},
+		":cf":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", consecutiveFail)},
+		":nc":     &types.AttributeValueMemberS{Value: nowStr},
+		":ua":     &types.AttributeValueMemberS{Value: upStr},
+	}
+	exprAttrNames := map[string]string{
+		"#s": "status",
+	}
+
+	if lastNotifiedAt != nil {
+		updateExpr += ", lastNotifiedAt = :lna, lastNotifiedEvent = :lne"
+		exprAttrVals[":lna"] = &types.AttributeValueMemberS{Value: lastNotifiedAt.Format(time.RFC3339Nano)}
+		exprAttrVals[":lne"] = &types.AttributeValueMemberS{Value: lastNotifiedEvent}
+	}
+
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(d.endpointsTable),
+		Key: map[string]types.AttributeValue{
+			"tenantId":   &types.AttributeValueMemberS{Value: tenantID},
+			"endpointId": &types.AttributeValueMemberS{Value: endpointID},
+		},
+		UpdateExpression:          aws.String(updateExpr),
+		ExpressionAttributeNames:  exprAttrNames,
+		ExpressionAttributeValues: exprAttrVals,
+		ConditionExpression:       aws.String("attribute_exists(tenantId) AND attribute_exists(endpointId)"),
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			return ErrEndpointNotFound
+		}
+		return fmt.Errorf("failed to update endpoint status: %w", err)
+	}
+	return nil
+}
+
+// DeleteEndpointCascade deletes all ping results and incidents for an endpoint, then deletes the endpoint item.
 func (d *DynamoStore) DeleteEndpointCascade(ctx context.Context, tenantID, endpointID string) error {
-	// 1. Delete endpoint record
+	// 1. Cascade delete all PingResults with full pagination
+	var lastKey map[string]types.AttributeValue
+	for {
+		qIn := &dynamodb.QueryInput{
+			TableName:              aws.String(d.pingResultsTable),
+			KeyConditionExpression: aws.String("endpointId = :eid"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":eid": &types.AttributeValueMemberS{Value: endpointID},
+			},
+			ExclusiveStartKey: lastKey,
+		}
+		res, err := d.client.Query(ctx, qIn)
+		if err != nil {
+			break
+		}
+		for _, item := range res.Items {
+			if checkedAtVal, ok := item["checkedAt"]; ok {
+				_, _ = d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+					TableName: aws.String(d.pingResultsTable),
+					Key: map[string]types.AttributeValue{
+						"endpointId": &types.AttributeValueMemberS{Value: endpointID},
+						"checkedAt":  checkedAtVal,
+					},
+				})
+			}
+		}
+		if res.LastEvaluatedKey == nil || len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		lastKey = res.LastEvaluatedKey
+	}
+
+	// 2. Cascade delete all Incidents with full pagination
+	lastKey = nil
+	for {
+		qIn := &dynamodb.QueryInput{
+			TableName:              aws.String(d.incidentsTable),
+			KeyConditionExpression: aws.String("endpointId = :eid"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":eid": &types.AttributeValueMemberS{Value: endpointID},
+			},
+			ExclusiveStartKey: lastKey,
+		}
+		res, err := d.client.Query(ctx, qIn)
+		if err != nil {
+			break
+		}
+		for _, item := range res.Items {
+			if startedAtVal, ok := item["startedAt"]; ok {
+				_, _ = d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+					TableName: aws.String(d.incidentsTable),
+					Key: map[string]types.AttributeValue{
+						"endpointId": &types.AttributeValueMemberS{Value: endpointID},
+						"startedAt":  startedAtVal,
+					},
+				})
+			}
+		}
+		if res.LastEvaluatedKey == nil || len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		lastKey = res.LastEvaluatedKey
+	}
+
+	// 3. Delete endpoint record last so partial failures can be safely retried
 	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(d.endpointsTable),
 		Key: map[string]types.AttributeValue{
@@ -148,36 +267,47 @@ func (d *DynamoStore) DeleteEndpointCascade(ctx context.Context, tenantID, endpo
 		return fmt.Errorf("failed to delete endpoint: %w", err)
 	}
 
-	// 2. Cascade delete PingResults
-	pings, err := d.ListPingResults(ctx, endpointID, 500)
-	if err == nil {
-		for _, ping := range pings {
-			checkedAtRFC := ping.CheckedAt.Format(time.RFC3339Nano)
-			_, _ = d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-				TableName: aws.String(d.pingResultsTable),
-				Key: map[string]types.AttributeValue{
-					"endpointId": &types.AttributeValueMemberS{Value: endpointID},
-					"checkedAt":  &types.AttributeValueMemberS{Value: checkedAtRFC},
-				},
-			})
-		}
+	return nil
+}
+
+// GetTenantSettings retrieves workspace alert and webhook preferences.
+func (d *DynamoStore) GetTenantSettings(ctx context.Context, tenantID string) (*models.TenantSettings, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(d.endpointsTable),
+		Key: map[string]types.AttributeValue{
+			"tenantId":   &types.AttributeValueMemberS{Value: tenantID},
+			"endpointId": &types.AttributeValueMemberS{Value: "_settings"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tenant settings: %w", err)
+	}
+	if out.Item == nil {
+		return nil, nil
 	}
 
-	// 3. Cascade delete Incidents
-	incidents, err := d.ListIncidents(ctx, endpointID)
-	if err == nil {
-		for _, inc := range incidents {
-			startedAtRFC := inc.StartedAt.Format(time.RFC3339Nano)
-			_, _ = d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-				TableName: aws.String(d.incidentsTable),
-				Key: map[string]types.AttributeValue{
-					"endpointId": &types.AttributeValueMemberS{Value: endpointID},
-					"startedAt":  &types.AttributeValueMemberS{Value: startedAtRFC},
-				},
-			})
-		}
+	var settings models.TenantSettings
+	if err := attributevalue.UnmarshalMap(out.Item, &settings); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tenant settings: %w", err)
+	}
+	return &settings, nil
+}
+
+// SaveTenantSettings stores workspace alert and webhook preferences.
+func (d *DynamoStore) SaveTenantSettings(ctx context.Context, settings models.TenantSettings) error {
+	settings.EndpointID = "_settings"
+	av, err := attributevalue.MarshalMap(settings)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tenant settings: %w", err)
 	}
 
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(d.endpointsTable),
+		Item:      av,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save tenant settings: %w", err)
+	}
 	return nil
 }
 

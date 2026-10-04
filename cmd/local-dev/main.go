@@ -17,8 +17,9 @@ import (
 
 type ConsoleNotifier struct{}
 
-func (n *ConsoleNotifier) Notify(_ context.Context, payload models.WebhookPayload) error {
+func (n *ConsoleNotifier) Notify(_ context.Context, webhookURL, secret string, payload models.WebhookPayload) error {
 	slog.Info("WEBHOOK NOTIFICATION DISPATCHED",
+		"target", webhookURL,
 		"event", payload.Event,
 		"endpointId", payload.EndpointID,
 		"endpointUrl", payload.EndpointURL,

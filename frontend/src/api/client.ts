@@ -76,8 +76,7 @@ export async function fetchEndpoints(token?: string, tenantId?: string): Promise
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
-    }
-    if (tenantId) {
+    } else if (tenantId) {
       headers['X-Tenant-ID'] = tenantId;
     }
 
@@ -110,8 +109,7 @@ export async function createEndpoint(
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
-  }
-  if (tenantId) {
+  } else if (tenantId) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -133,8 +131,7 @@ export async function deleteEndpoint(endpointId: string, token?: string, tenantI
   const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
-  }
-  if (tenantId) {
+  } else if (tenantId) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -186,8 +183,11 @@ export async function triggerManualCheck(
   tenantId?: string
 ): Promise<ManualCheckResponse> {
   const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (tenantId) headers['X-Tenant-ID'] = tenantId;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
+  }
 
   const res = await fetch(`${PRIVATE_API_BASE}/endpoints/${endpointId}/check`, {
     method: 'POST',
@@ -221,8 +221,11 @@ export async function testWebhook(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (tenantId) headers['X-Tenant-ID'] = tenantId;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
+  }
 
   const res = await fetch(`${PRIVATE_API_BASE}/settings/webhook/test`, {
     method: 'POST',
@@ -235,6 +238,50 @@ export async function testWebhook(
     throw new Error(data.error || `Webhook test failed: ${res.statusText}`);
   }
 
+  return res.json();
+}
+
+export interface WebhookSettings {
+  webhookUrl: string;
+  secret: string;
+}
+
+export async function fetchWebhookSettings(token?: string, tenantId?: string): Promise<WebhookSettings> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
+  }
+
+  const res = await fetch(`${PRIVATE_API_BASE}/settings/webhook`, { headers });
+  if (!res.ok) {
+    throw new Error(`Failed to load webhook settings: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateWebhookSettings(
+  settings: { webhookUrl?: string; secret?: string },
+  token?: string,
+  tenantId?: string
+): Promise<WebhookSettings> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
+  }
+
+  const res = await fetch(`${PRIVATE_API_BASE}/settings/webhook`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(errorBody.error || `Failed to update webhook settings (${res.status})`);
+  }
   return res.json();
 }
 

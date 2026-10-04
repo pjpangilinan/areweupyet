@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -19,7 +20,7 @@ type MockNotifier struct {
 	payloads []models.WebhookPayload
 }
 
-func (m *MockNotifier) Notify(_ context.Context, payload models.WebhookPayload) error {
+func (m *MockNotifier) Notify(_ context.Context, webhookURL, secret string, payload models.WebhookPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.payloads = append(m.payloads, payload)
@@ -38,6 +39,12 @@ func TestDispatcher_IncidentDetectionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store := dynamo.NewMemoryStore()
 	notifier := &MockNotifier{}
+
+	// Seed tenant webhook settings
+	require.NoError(t, store.SaveTenantSettings(ctx, models.TenantSettings{
+		TenantID:   "t1",
+		WebhookURL: "https://example.com/webhook",
+	}))
 
 	d := New(store, notifier, Config{
 		WorkerPoolSize:       5,
@@ -105,15 +112,26 @@ func TestDispatcher_NotificationCooldown(t *testing.T) {
 	})
 
 	now := time.Now()
+	ep := models.Endpoint{EndpointID: "ep-1"}
 
 	// First notification should succeed
-	assert.True(t, d.shouldNotify("ep-1", "incident.opened", now))
+	assert.True(t, d.shouldNotify(ep, "incident.opened", now))
 
 	// Second notification within cooldown should be suppressed
-	assert.False(t, d.shouldNotify("ep-1", "incident.opened", now.Add(2*time.Minute)))
+	assert.False(t, d.shouldNotify(ep, "incident.opened", now.Add(2*time.Minute)))
 
 	// After cooldown expires, notification should succeed
-	assert.True(t, d.shouldNotify("ep-1", "incident.opened", now.Add(6*time.Minute)))
+	assert.True(t, d.shouldNotify(ep, "incident.opened", now.Add(6*time.Minute)))
+
+	// Persistent notification test: if ep.LastNotifiedAt is within cooldown, suppressed
+	pastNotified := now.Add(1 * time.Minute)
+	epWithState := models.Endpoint{
+		EndpointID:        "ep-persisted",
+		LastNotifiedAt:    &pastNotified,
+		LastNotifiedEvent: "incident.opened",
+	}
+	assert.False(t, d.shouldNotify(epWithState, "incident.opened", now.Add(2*time.Minute)))
+	assert.True(t, d.shouldNotify(epWithState, "incident.opened", now.Add(7*time.Minute)))
 }
 
 func TestDispatcher_SyntheticLoad50Endpoints(t *testing.T) {
@@ -152,3 +170,54 @@ func TestDispatcher_SyntheticLoad50Endpoints(t *testing.T) {
 	// Must finish all 50 endpoints well within 1 second!
 	assert.Less(t, duration, 2*time.Second, "50 endpoints took %v", duration)
 }
+
+type FailingStore struct {
+	dynamo.Store
+	claimErr  error
+	updateErr error
+}
+
+func (f *FailingStore) ClaimDueEndpoints(ctx context.Context, dueBefore time.Time, limit int) ([]models.Endpoint, error) {
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
+	return f.Store.ClaimDueEndpoints(ctx, dueBefore, limit)
+}
+
+func (f *FailingStore) UpdateEndpointStatus(ctx context.Context, tenantID, endpointID, status string, consecutiveFail int, nextCheckAt, updatedAt time.Time, lastNotifiedAt *time.Time, lastNotifiedEvent string) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	return f.Store.UpdateEndpointStatus(ctx, tenantID, endpointID, status, consecutiveFail, nextCheckAt, updatedAt, lastNotifiedAt, lastNotifiedEvent)
+}
+
+func TestDispatcher_StoreErrorResilience(t *testing.T) {
+	ctx := context.Background()
+	mem := dynamo.NewMemoryStore()
+	failingStore := &FailingStore{
+		Store:    mem,
+		claimErr: errors.New("dynamodb throughput exceeded"),
+	}
+
+	d := New(failingStore, &MockNotifier{}, Config{WorkerPoolSize: 2})
+	count, err := d.RunOnce(ctx, time.Now())
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+
+	// Test update error handling during worker execution
+	failingStore.claimErr = nil
+	failingStore.updateErr = errors.New("conditional write failed: concurrent update")
+	_ = mem.CreateEndpoint(ctx, models.Endpoint{
+		TenantID:     "t-fail",
+		EndpointID:   "ep-fail",
+		NextCheckAt:  time.Now().Add(-1 * time.Minute),
+		StatusBucket: "ACTIVE",
+		FrequencyMin: 5,
+	})
+
+	// Does not panic or crash
+	count, err = d.RunOnce(ctx, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+

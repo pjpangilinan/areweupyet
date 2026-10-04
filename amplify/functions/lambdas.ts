@@ -9,6 +9,8 @@ export interface LambdaFunctionsProps {
   endpointsTable: dynamodb.ITable;
   pingResultsTable: dynamodb.ITable;
   incidentsTable: dynamodb.ITable;
+  userPoolId?: string;
+  userPoolClientId?: string;
 }
 
 export class LambdaFunctions extends Construct {
@@ -28,6 +30,20 @@ export class LambdaFunctions extends Construct {
       INCIDENTS_TABLE: props.incidentsTable.tableName,
     };
 
+    // 4. Webhook Notifier Function
+    // Free tier status: Always-Free tier.
+    this.notifierFn = new lambda.Function(this, 'NotifierFunction', {
+      functionName: 'AreWeUpYet-Notifier',
+      description: 'Asynchronous webhook delivery with HMAC signature',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.X86_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('dist/notifier'),
+      memorySize: 128,
+      timeout: Duration.seconds(30),
+      environment: commonEnv,
+    });
+
     // 1. Dispatcher Function (ticks every 1 min via EventBridge)
     // Free tier status: Always-Free tier (128MB memory, runs ~1s per invocation = well under 3.2M sec/mo).
     this.dispatcherFn = new lambda.Function(this, 'DispatcherFunction', {
@@ -39,8 +55,14 @@ export class LambdaFunctions extends Construct {
       code: lambda.Code.fromAsset('dist/dispatcher'),
       memorySize: 128,
       timeout: Duration.seconds(55),
-      environment: commonEnv,
+      environment: {
+        ...commonEnv,
+        NOTIFIER_FUNCTION_NAME: this.notifierFn.functionName,
+      },
     });
+
+    // Grant dispatcher permission to invoke notifier Lambda asynchronously
+    this.notifierFn.grantInvoke(this.dispatcherFn);
 
     // 2. Private Authenticated API Function (Lambda Function URL, Cognito authenticated)
     // Free tier status: Always-Free tier (Lambda Function URL has $0 separate charge vs API Gateway).
@@ -53,7 +75,11 @@ export class LambdaFunctions extends Construct {
       code: lambda.Code.fromAsset('dist/api-private'),
       memorySize: 128,
       timeout: Duration.seconds(15),
-      environment: commonEnv,
+      environment: {
+        ...commonEnv,
+        COGNITO_USER_POOL_ID: props.userPoolId || '',
+        COGNITO_APP_CLIENT_ID: props.userPoolClientId || '',
+      },
     });
 
     this.apiPrivateUrl = this.apiPrivateFn.addFunctionUrl({
@@ -66,7 +92,7 @@ export class LambdaFunctions extends Construct {
           lambda.HttpMethod.PUT,
           lambda.HttpMethod.DELETE,
         ],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
       },
     });
 
@@ -89,22 +115,8 @@ export class LambdaFunctions extends Construct {
       cors: {
         allowedOrigins: ['*'],
         allowedMethods: [lambda.HttpMethod.GET],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-ID'],
+        allowedHeaders: ['Content-Type'],
       },
-    });
-
-    // 4. Webhook Notifier Function
-    // Free tier status: Always-Free tier.
-    this.notifierFn = new lambda.Function(this, 'NotifierFunction', {
-      functionName: 'AreWeUpYet-Notifier',
-      description: 'Asynchronous webhook delivery with HMAC signature',
-      runtime: lambda.Runtime.PROVIDED_AL2023,
-      architecture: lambda.Architecture.X86_64,
-      handler: 'bootstrap',
-      code: lambda.Code.fromAsset('dist/notifier'),
-      memorySize: 128,
-      timeout: Duration.seconds(30),
-      environment: commonEnv,
     });
 
     // EventBridge 1-minute rate trigger for Dispatcher

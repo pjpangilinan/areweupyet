@@ -186,3 +186,60 @@ func TestDynamo_AttributeValueSerialization(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ttlVal, unmarshaledPing.TTL)
 }
+
+func TestMemoryStore_UpdateEndpointStatusAndSettings(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+
+	// 1. Settings CRUD
+	settings, err := store.GetTenantSettings(ctx, "tenant-settings")
+	require.NoError(t, err)
+	assert.Nil(t, settings)
+
+	s := models.TenantSettings{
+		TenantID:      "tenant-settings",
+		WebhookURL:    "https://example.com/alerts",
+		WebhookSecret: "test-secret-123",
+	}
+	err = store.SaveTenantSettings(ctx, s)
+	require.NoError(t, err)
+
+	gotSettings, err := store.GetTenantSettings(ctx, "tenant-settings")
+	require.NoError(t, err)
+	require.NotNil(t, gotSettings)
+	assert.Equal(t, "https://example.com/alerts", gotSettings.WebhookURL)
+	assert.Equal(t, "test-secret-123", gotSettings.WebhookSecret)
+
+	// Ensure _settings is not listed as an endpoint
+	endpoints, err := store.ListEndpoints(ctx, "tenant-settings")
+	require.NoError(t, err)
+	assert.Empty(t, endpoints)
+
+	// 2. UpdateEndpointStatus atomic check
+	now := time.Now()
+	ep := models.Endpoint{
+		TenantID:        "tenant-settings",
+		EndpointID:      "ep-status",
+		Name:            "Original Name",
+		URL:             "https://original.com",
+		FrequencyMin:    5,
+		StatusBucket:    "ACTIVE",
+		NextCheckAt:     now,
+		Status:          "PENDING",
+		ConsecutiveFail: 0,
+	}
+	require.NoError(t, store.CreateEndpoint(ctx, ep))
+
+	next := now.Add(5 * time.Minute)
+	err = store.UpdateEndpointStatus(ctx, "tenant-settings", "ep-status", "UP", 0, next, now, &now, "incident.resolved")
+	require.NoError(t, err)
+
+	updated, err := store.GetEndpoint(ctx, "tenant-settings", "ep-status")
+	require.NoError(t, err)
+	assert.Equal(t, "UP", updated.Status)
+	assert.Equal(t, 0, updated.ConsecutiveFail)
+	assert.Equal(t, "Original Name", updated.Name) // preserved!
+	assert.Equal(t, "https://original.com", updated.URL) // preserved!
+	assert.Equal(t, "incident.resolved", updated.LastNotifiedEvent)
+	require.NotNil(t, updated.LastNotifiedAt)
+}

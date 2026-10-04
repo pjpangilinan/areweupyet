@@ -22,12 +22,16 @@ type CheckOptions struct {
 
 // CheckEndpoint performs an HTTP GET request with SSRF protection and latency measurement.
 func CheckEndpoint(ctx context.Context, opts CheckOptions) models.PingResult {
-	start := time.Now()
-
 	timeout := time.Duration(opts.TimeoutSec) * time.Second
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	return CheckEndpointWithClient(ctx, opts, ssrfguard.SafeHTTPClient(timeout))
+}
+
+// CheckEndpointWithClient performs an HTTP GET request using the provided HTTP client.
+func CheckEndpointWithClient(ctx context.Context, opts CheckOptions, client *http.Client) models.PingResult {
+	start := time.Now()
 
 	result := models.PingResult{
 		CheckedAt: start.UTC(),
@@ -42,7 +46,13 @@ func CheckEndpoint(ctx context.Context, opts CheckOptions) models.PingResult {
 		return result
 	}
 
-	client := ssrfguard.SafeHTTPClient(timeout)
+	if client == nil {
+		timeout := time.Duration(opts.TimeoutSec) * time.Second
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		client = ssrfguard.SafeHTTPClient(timeout)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.URL, nil)
 	if err != nil {

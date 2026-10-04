@@ -14,7 +14,7 @@ import (
 
 // Notifier defines the interface for dispatching state-change alerts.
 type Notifier interface {
-	Notify(ctx context.Context, payload models.WebhookPayload) error
+	Notify(ctx context.Context, webhookURL, secret string, payload models.WebhookPayload) error
 }
 
 // Config tunes dispatcher execution.
@@ -113,7 +113,7 @@ func (d *Dispatcher) processEndpoint(ctx context.Context, ep models.Endpoint, no
 		// Successful check
 		if ep.Status == "DOWN" {
 			// Transition: DOWN -> UP (1 success closes incident)
-			d.handleIncidentClose(ctx, ep, now)
+			d.handleIncidentClose(ctx, &ep, now)
 		}
 		ep.Status = "UP"
 		ep.ConsecutiveFail = 0
@@ -123,7 +123,7 @@ func (d *Dispatcher) processEndpoint(ctx context.Context, ep models.Endpoint, no
 		if ep.ConsecutiveFail >= 2 && ep.Status != "DOWN" {
 			// Transition: UP/PENDING -> DOWN (2 consecutive failures opens incident)
 			ep.Status = "DOWN"
-			d.handleIncidentOpen(ctx, ep, now, pingResult.ErrorMessage)
+			d.handleIncidentOpen(ctx, &ep, now, pingResult.ErrorMessage)
 		}
 	}
 
@@ -134,12 +134,12 @@ func (d *Dispatcher) processEndpoint(ctx context.Context, ep models.Endpoint, no
 	}
 	ep.NextCheckAt = now.Add(time.Duration(freq) * time.Minute)
 
-	if err := d.store.UpdateEndpoint(ctx, ep); err != nil {
+	if err := d.store.UpdateEndpointStatus(ctx, ep.TenantID, ep.EndpointID, ep.Status, ep.ConsecutiveFail, ep.NextCheckAt, ep.UpdatedAt, ep.LastNotifiedAt, ep.LastNotifiedEvent); err != nil {
 		slog.Error("failed to update endpoint status", "endpointId", ep.EndpointID, "error", err)
 	}
 }
 
-func (d *Dispatcher) handleIncidentOpen(ctx context.Context, ep models.Endpoint, now time.Time, reason string) {
+func (d *Dispatcher) handleIncidentOpen(ctx context.Context, ep *models.Endpoint, now time.Time, reason string) {
 	slog.Warn("incident opened", "endpointId", ep.EndpointID, "reason", reason)
 
 	inc := models.Incident{
@@ -153,20 +153,27 @@ func (d *Dispatcher) handleIncidentOpen(ctx context.Context, ep models.Endpoint,
 		slog.Error("failed to save incident", "endpointId", ep.EndpointID, "error", err)
 	}
 
-	if d.shouldNotify(ep.EndpointID, "incident.opened", now) && d.notifier != nil {
-		payload := models.WebhookPayload{
-			Event:       "incident.opened",
-			TenantID:    ep.TenantID,
-			EndpointID:  ep.EndpointID,
-			EndpointURL: ep.URL,
-			IncidentID:  fmt.Sprintf("%s-%d", ep.EndpointID, now.Unix()),
-			StartedAt:   now,
+	if d.shouldNotify(*ep, "incident.opened", now) && d.notifier != nil {
+		settings, err := d.store.GetTenantSettings(ctx, ep.TenantID)
+		if err == nil && settings != nil && settings.WebhookURL != "" {
+			payload := models.WebhookPayload{
+				Event:       "incident.opened",
+				TenantID:    ep.TenantID,
+				EndpointID:  ep.EndpointID,
+				EndpointURL: ep.URL,
+				IncidentID:  fmt.Sprintf("%s-%d", ep.EndpointID, now.Unix()),
+				StartedAt:   now,
+			}
+			if err := d.notifier.Notify(ctx, settings.WebhookURL, settings.WebhookSecret, payload); err != nil {
+				slog.Error("failed to deliver incident open notification", "endpointId", ep.EndpointID, "error", err)
+			}
+			ep.LastNotifiedAt = &now
+			ep.LastNotifiedEvent = "incident.opened"
 		}
-		_ = d.notifier.Notify(ctx, payload)
 	}
 }
 
-func (d *Dispatcher) handleIncidentClose(ctx context.Context, ep models.Endpoint, now time.Time) {
+func (d *Dispatcher) handleIncidentClose(ctx context.Context, ep *models.Endpoint, now time.Time) {
 	slog.Info("incident resolved", "endpointId", ep.EndpointID)
 
 	openInc, err := d.store.GetOpenIncident(ctx, ep.EndpointID)
@@ -182,30 +189,46 @@ func (d *Dispatcher) handleIncidentClose(ctx context.Context, ep models.Endpoint
 		slog.Error("failed to close incident", "endpointId", ep.EndpointID, "error", err)
 	}
 
-	if d.shouldNotify(ep.EndpointID, "incident.resolved", now) && d.notifier != nil {
-		payload := models.WebhookPayload{
-			Event:           "incident.resolved",
-			TenantID:        ep.TenantID,
-			EndpointID:      ep.EndpointID,
-			EndpointURL:     ep.URL,
-			IncidentID:      fmt.Sprintf("%s-%d", ep.EndpointID, openInc.StartedAt.Unix()),
-			StartedAt:       openInc.StartedAt,
-			ResolvedAt:      &resolvedAt,
-			DurationSeconds: openInc.DurationSeconds,
+	if d.shouldNotify(*ep, "incident.resolved", now) && d.notifier != nil {
+		settings, err := d.store.GetTenantSettings(ctx, ep.TenantID)
+		if err == nil && settings != nil && settings.WebhookURL != "" {
+			payload := models.WebhookPayload{
+				Event:           "incident.resolved",
+				TenantID:        ep.TenantID,
+				EndpointID:      ep.EndpointID,
+				EndpointURL:     ep.URL,
+				IncidentID:      fmt.Sprintf("%s-%d", ep.EndpointID, openInc.StartedAt.Unix()),
+				StartedAt:       openInc.StartedAt,
+				ResolvedAt:      &resolvedAt,
+				DurationSeconds: openInc.DurationSeconds,
+			}
+			if err := d.notifier.Notify(ctx, settings.WebhookURL, settings.WebhookSecret, payload); err != nil {
+				slog.Error("failed to deliver incident close notification", "endpointId", ep.EndpointID, "error", err)
+			}
+			ep.LastNotifiedAt = &now
+			ep.LastNotifiedEvent = "incident.resolved"
 		}
-		_ = d.notifier.Notify(ctx, payload)
 	}
 }
 
-// shouldNotify checks the notification cooldown to prevent alert flooding on flapping endpoints.
-func (d *Dispatcher) shouldNotify(endpointID, event string, now time.Time) bool {
+// shouldNotify checks both persistent and in-memory notification cooldowns to prevent alert flooding.
+func (d *Dispatcher) shouldNotify(ep models.Endpoint, event string, now time.Time) bool {
+	// 1. Check persistent cooldown recorded in database
+	if ep.LastNotifiedEvent == event && ep.LastNotifiedAt != nil {
+		if now.Sub(*ep.LastNotifiedAt) < d.cfg.NotificationCooldown {
+			slog.Warn("notification suppressed by persistent cooldown", "endpointId", ep.EndpointID, "event", event)
+			return false
+		}
+	}
+
+	// 2. Check local in-memory cooldown for active process run
 	d.lastNotifyMu.Lock()
 	defer d.lastNotifyMu.Unlock()
 
-	key := fmt.Sprintf("%s:%s", endpointID, event)
+	key := fmt.Sprintf("%s:%s", ep.EndpointID, event)
 	last, exists := d.lastNotifyTime[key]
 	if exists && now.Sub(last) < d.cfg.NotificationCooldown {
-		slog.Warn("notification suppressed by cooldown", "endpointId", endpointID, "event", event)
+		slog.Warn("notification suppressed by local cooldown", "endpointId", ep.EndpointID, "event", event)
 		return false
 	}
 

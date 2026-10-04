@@ -427,4 +427,70 @@ func TestPrivateAPI_CryptographicJWTVerification(t *testing.T) {
 	wTampered := httptest.NewRecorder()
 	server.ServeHTTP(wTampered, reqTampered)
 	assert.Equal(t, http.StatusUnauthorized, wTampered.Code)
+
+	// 6. Audience mismatch -> 401 Unauthorized
+	verifier.SetAppClientID("expected-client-app-id")
+	// validClaims has no aud, so it fails audience verification
+	reqAudMismatch := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqAudMismatch.Header.Set("Authorization", "Bearer "+validToken)
+	wAudMismatch := httptest.NewRecorder()
+	server.ServeHTTP(wAudMismatch, reqAudMismatch)
+	assert.Equal(t, http.StatusUnauthorized, wAudMismatch.Code)
+
+	// With matching aud -> 200 OK
+	audClaims := validClaims
+	audClaims.Aud = "expected-client-app-id"
+	audToken := createTestRS256Token(t, privKey, kid, audClaims)
+	reqAudMatch := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
+	reqAudMatch.Header.Set("Authorization", "Bearer "+audToken)
+	wAudMatch := httptest.NewRecorder()
+	server.ServeHTTP(wAudMatch, reqAudMatch)
+	assert.Equal(t, http.StatusOK, wAudMatch.Code)
 }
+
+func TestPrivateAPI_WebhookSettingsEndpoints(t *testing.T) {
+	store := dynamo.NewMemoryStore()
+	server := NewServer(store)
+	tenant := "tenant-webhook-test"
+
+	// 1. Get default settings
+	reqGet := httptest.NewRequest(http.MethodGet, "/settings/webhook", nil)
+	reqGet.Header.Set("X-Tenant-ID", tenant)
+	wGet := httptest.NewRecorder()
+	server.ServeHTTP(wGet, reqGet)
+	assert.Equal(t, http.StatusOK, wGet.Code)
+
+	var getRes map[string]string
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &getRes))
+	assert.Empty(t, getRes["webhookUrl"])
+	assert.NotEmpty(t, getRes["secret"])
+
+	// 2. Put invalid SSRF URL (e.g. metadata endpoint) -> 400 Bad Request
+	badBody := `{"webhookUrl":"http://169.254.169.254/latest/meta-data"}`
+	reqBad := httptest.NewRequest(http.MethodPut, "/settings/webhook", strings.NewReader(badBody))
+	reqBad.Header.Set("X-Tenant-ID", tenant)
+	wBad := httptest.NewRecorder()
+	server.ServeHTTP(wBad, reqBad)
+	assert.Equal(t, http.StatusBadRequest, wBad.Code)
+
+	// 3. Put valid webhook URL -> 200 OK
+	goodBody := `{"webhookUrl":"https://example.com/webhooks/uptime","secret":"custom-secret-key"}`
+	reqGood := httptest.NewRequest(http.MethodPut, "/settings/webhook", strings.NewReader(goodBody))
+	reqGood.Header.Set("X-Tenant-ID", tenant)
+	wGood := httptest.NewRecorder()
+	server.ServeHTTP(wGood, reqGood)
+	assert.Equal(t, http.StatusOK, wGood.Code)
+
+	var goodRes map[string]string
+	require.NoError(t, json.Unmarshal(wGood.Body.Bytes(), &goodRes))
+	assert.Equal(t, "https://example.com/webhooks/uptime", goodRes["webhookUrl"])
+	assert.Equal(t, "custom-secret-key", goodRes["secret"])
+
+	// Verify persistence in store
+	settings, err := store.GetTenantSettings(context.Background(), tenant)
+	require.NoError(t, err)
+	require.NotNil(t, settings)
+	assert.Equal(t, "https://example.com/webhooks/uptime", settings.WebhookURL)
+	assert.Equal(t, "custom-secret-key", settings.WebhookSecret)
+}
+

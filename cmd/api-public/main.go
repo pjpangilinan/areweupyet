@@ -38,7 +38,11 @@ func init() {
 	} else {
 		cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 		if err != nil {
-			slog.Error("failed to load AWS config, falling back to memory store", "error", err)
+			if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
+				slog.Error("fatal: failed to load AWS config for DynamoDB", "error", err)
+				panic("failed to load AWS config: " + err.Error())
+			}
+			slog.Warn("failed to load AWS config, falling back to memory store", "error", err)
 			store = dynamo.NewMemoryStore()
 		} else {
 			client := dynamodb.NewFromConfig(cfg)

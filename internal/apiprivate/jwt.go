@@ -17,13 +17,14 @@ import (
 )
 
 var (
-	ErrInvalidToken   = errors.New("invalid token format")
-	ErrUnsupportedAlg = errors.New("unsupported signing algorithm")
-	ErrKeyNotFound    = errors.New("signing key not found in JWKS")
-	ErrTokenExpired   = errors.New("token is expired")
-	ErrInvalidIssuer  = errors.New("token issuer does not match Cognito User Pool")
-	ErrInvalidUse     = errors.New("token_use must be id or access")
-	ErrMissingSub     = errors.New("token missing sub claim")
+	ErrInvalidToken    = errors.New("invalid token format")
+	ErrUnsupportedAlg  = errors.New("unsupported signing algorithm")
+	ErrKeyNotFound     = errors.New("signing key not found in JWKS")
+	ErrTokenExpired    = errors.New("token is expired")
+	ErrInvalidIssuer   = errors.New("token issuer does not match Cognito User Pool")
+	ErrInvalidAudience = errors.New("token audience does not match Cognito App Client ID")
+	ErrInvalidUse      = errors.New("token_use must be id or access")
+	ErrMissingSub      = errors.New("token missing sub claim")
 )
 
 type TokenClaims struct {
@@ -31,6 +32,8 @@ type TokenClaims struct {
 	Iss      string `json:"iss"`
 	Exp      int64  `json:"exp"`
 	TokenUse string `json:"token_use"`
+	Aud      string `json:"aud,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
 	Email    string `json:"email,omitempty"`
 }
 
@@ -49,13 +52,14 @@ type jwkKey struct {
 
 // JWKSVerifier verifies Cognito JWT tokens cryptographically against JWKS public keys.
 type JWKSVerifier struct {
-	region     string
-	userPoolID string
-	jwksURL    string
-	httpClient *http.Client
-	mu         sync.RWMutex
-	keys       map[string]*rsa.PublicKey
-	lastFetch  time.Time
+	region      string
+	userPoolID  string
+	appClientID string
+	jwksURL     string
+	httpClient  *http.Client
+	mu          sync.RWMutex
+	keys        map[string]*rsa.PublicKey
+	lastFetch   time.Time
 }
 
 // NewJWKSVerifier creates a verifier for an AWS Cognito User Pool.
@@ -68,6 +72,13 @@ func NewJWKSVerifier(region, userPoolID string) *JWKSVerifier {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		keys:       make(map[string]*rsa.PublicKey),
 	}
+}
+
+// SetAppClientID configures the expected Cognito App Client ID to verify aud/client_id claims.
+func (v *JWKSVerifier) SetAppClientID(clientID string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.appClientID = clientID
 }
 
 // NewJWKSVerifierWithKeys allows injecting static RSA public keys for unit testing.
@@ -85,10 +96,17 @@ func (v *JWKSVerifier) getKey(ctx context.Context, kid string) (*rsa.PublicKey, 
 	v.mu.RLock()
 	key, exists := v.keys[kid]
 	cacheFresh := time.Since(v.lastFetch) < 1*time.Hour
+	hasKeys := len(v.keys) > 0
+	recentFetch := time.Since(v.lastFetch) < 1*time.Minute
 	v.mu.RUnlock()
 
 	if exists && cacheFresh {
 		return key, nil
+	}
+
+	// DoS protection: do not flood Cognito JWKS endpoint if recently refreshed and key is still absent
+	if !exists && hasKeys && recentFetch {
+		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, kid)
 	}
 
 	// Fetch or refresh JWKS
@@ -98,6 +116,9 @@ func (v *JWKSVerifier) getKey(ctx context.Context, kid string) (*rsa.PublicKey, 
 	// Double check under write lock
 	if key, exists := v.keys[kid]; exists && time.Since(v.lastFetch) < 1*time.Hour {
 		return key, nil
+	}
+	if len(v.keys) > 0 && time.Since(v.lastFetch) < 1*time.Minute {
+		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, kid)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
@@ -210,6 +231,19 @@ func (v *JWKSVerifier) VerifyToken(ctx context.Context, tokenString string) (*To
 		return nil, fmt.Errorf("%w: got %s", ErrInvalidUse, claims.TokenUse)
 	}
 
+	v.mu.RLock()
+	appClientID := v.appClientID
+	v.mu.RUnlock()
+
+	if appClientID != "" {
+		if claims.TokenUse == "id" && claims.Aud != appClientID {
+			return nil, fmt.Errorf("%w: got aud %s, expected %s", ErrInvalidAudience, claims.Aud, appClientID)
+		}
+		if claims.TokenUse == "access" && claims.ClientID != appClientID {
+			return nil, fmt.Errorf("%w: got client_id %s, expected %s", ErrInvalidAudience, claims.ClientID, appClientID)
+		}
+	}
+
 	if claims.Sub == "" {
 		return nil, ErrMissingSub
 	}
@@ -248,3 +282,20 @@ func decodeBase64URL(seg string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+func parseUnverifiedClaims(token string) (*TokenClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil, ErrInvalidToken
+	}
+	payloadBytes, err := decodeBase64URL(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims TokenClaims
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, err
+	}
+	return &claims, nil
+}
+

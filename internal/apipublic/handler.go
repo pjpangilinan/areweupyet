@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -178,7 +179,7 @@ func (s *Server) handleGetTenantStatus(w http.ResponseWriter, r *http.Request) {
 		summary := PublicEndpointSummary{
 			EndpointID:    ep.EndpointID,
 			Name:          ep.Name,
-			URL:           ep.URL,
+			URL:           sanitizePublicURL(ep.URL),
 			Group:         ep.Group,
 			FrequencyMin:  ep.FrequencyMin,
 			Status:        ep.Status,
@@ -188,7 +189,11 @@ func (s *Server) handleGetTenantStatus(w http.ResponseWriter, r *http.Request) {
 		if ep.Status == "DOWN" {
 			downCount++
 			inc, _ := s.store.GetOpenIncident(r.Context(), ep.EndpointID)
-			summary.ActiveIncident = inc
+			if inc != nil {
+				incCopy := *inc
+				incCopy.Reason = sanitizePublicError(incCopy.Reason)
+				summary.ActiveIncident = &incCopy
+			}
 		}
 
 		summaries = append(summaries, summary)
@@ -239,6 +244,9 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 	if pings == nil {
 		pings = []models.PingResult{}
 	}
+	for i := range pings {
+		pings[i].ErrorMessage = sanitizePublicError(pings[i].ErrorMessage)
+	}
 
 	incidents, _ := s.store.ListIncidents(r.Context(), ep.EndpointID)
 	if incidents == nil {
@@ -250,6 +258,9 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 	u7d := accounting.CalculateUptime(incidents, now.Add(-7*24*time.Hour), now)
 	u30d := accounting.CalculateUptime(incidents, now.Add(-30*24*time.Hour), now)
 	timeline := accounting.FormatTimeline(incidents)
+	for i := range timeline {
+		timeline[i].Reason = sanitizePublicError(timeline[i].Reason)
+	}
 
 	response := EndpointHistoryResponse{
 		EndpointID:  endpointID,
@@ -261,6 +272,41 @@ func (s *Server) handleGetEndpointHistory(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func sanitizePublicURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func sanitizePublicError(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "ssrf") || strings.Contains(lower, "blocked") || strings.Contains(lower, "private") || strings.Contains(lower, "resolv") || strings.Contains(lower, "169.254") || strings.Contains(lower, "127.") || strings.Contains(lower, "10.") || strings.Contains(lower, "192.168") || strings.Contains(lower, "172.") {
+		return "Target unreachable"
+	}
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") {
+		return "Request timeout"
+	}
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") {
+		return "Connection failed"
+	}
+	// Allow HTTP status messages (e.g. "503 Service Unavailable", "500 Internal Server Error")
+	if len(msg) >= 3 && msg[0] >= '1' && msg[0] <= '5' && msg[1] >= '0' && msg[1] <= '9' && msg[2] >= '0' && msg[2] <= '9' {
+		return msg
+	}
+	if strings.Contains(lower, "status") || strings.Contains(lower, "service unavailable") || strings.Contains(lower, "bad gateway") || strings.Contains(lower, "internal server error") {
+		return msg
+	}
+	return "Probe failed"
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
